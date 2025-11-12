@@ -673,9 +673,8 @@ class ExperimentRunner:
             grs80 = pyproj.Geod(ellps='GRS80')
             self.logger.debug("Initialized pyproj.Geod")
             
-            # Load area information (like Hikima's line 54)
-            # For now, we'll use synthetic coordinates but the structure matches
-            self.logger.debug("Loading area information")
+            # Load area information from S3 (Hikima's line 54)
+            self.logger.debug("Loading area information from S3")
             location_data = self._load_area_information()
             self.logger.debug(f"Loaded {len(location_data)} location coordinates")
             
@@ -707,34 +706,19 @@ class ExperimentRunner:
         # Hikima's exact approach: separate pickup vs dropoff data
         
         # Get requesters: trips STARTING in this time window (pickup_datetime)
+        # These trips are filtered by pickup time and represent new requests
         requesters_data = data.copy()  # These are new trip requests
         
-        # Get taxis: simulate vehicles finishing trips and becoming available
-        # In the original setup, this would be trips ending in the time window
-        # Since we don't have proper dropoff timing in our simplified data,
-        # we simulate this by using a different subset with some randomization
+        # Get taxis: vehicles finishing trips and becoming available
+        # In Hikima's implementation, taxis come from ALL trips (full day data)
+        # that end (dropoff) within the current time window
+        # Since our data is already filtered by time window for pickups,
+        # we need to use a broader dataset or the same dataset represents both
+        # requesters (starting trips) and taxis (ending trips from previous requests)
         
-        # Simulate realistic taxi availability (usually different from requests)
-        np.random.seed(42 + len(data))  # Consistent but different from requesters
-        
-        if len(data) > 1:
-            # Simulate taxi supply: typically 70-130% of request demand
-            supply_ratio = np.random.uniform(0.7, 1.3)
-            target_taxi_count = max(1, int(len(data) * supply_ratio))
-            
-            # Sample different indices for taxis (simulating dropoffs in the area)
-            if target_taxi_count >= len(data):
-                # More taxis than trips - duplicate some with location noise
-                taxis_data = data.copy()
-                additional_needed = target_taxi_count - len(data)
-                if additional_needed > 0:
-                    extra_taxis = data.sample(n=min(additional_needed, len(data)), replace=True, random_state=42)
-                    taxis_data = pd.concat([taxis_data, extra_taxis], ignore_index=True)
-            else:
-                # Fewer taxis than requests - sample subset
-                taxis_data = data.sample(n=target_taxi_count, replace=False, random_state=42)
-        else:
-            taxis_data = data.copy()
+        # For alignment with original: use the same filtered data as taxi supply
+        # This represents taxis that were busy with earlier trips now becoming available
+        taxis_data = data.copy()
         
         self.logger.debug(f"Requesters from pickup data: {len(requesters_data)}, Taxis from simulated dropoffs: {len(taxis_data)}")
         self.logger.debug(f"Request/Taxi ratio: {len(requesters_data)/max(1,len(taxis_data)):.2f} (realistic variation)")
@@ -787,20 +771,33 @@ class ExperimentRunner:
         }
     
     def _load_area_information(self) -> Dict[int, Tuple[float, float]]:
-        """Load area coordinate information (simplified version of Hikima's area_information.csv)."""
-        # This is a simplified version. In full implementation, would load actual CSV
-        # For now, create synthetic but consistent coordinates
-        import numpy as np
-        np.random.seed(42)  # Ensure consistency
-        
-        location_coords = {}
-        for loc_id in range(1, self.config.max_location_id + 1):  # LocationIDs 1-max_location_id
-            # Generate consistent coordinates for NYC area
-            lat = 40.7 + np.random.normal(0, 0.1)  # Roughly NYC latitude
-            lon = -74.0 + np.random.normal(0, 0.1)  # Roughly NYC longitude
-            location_coords[loc_id] = (lon, lat)  # (longitude, latitude)
-        
-        return location_coords
+        """Load area coordinate information from S3 (Hikima's area_information.csv)."""
+        # Load real area information from S3 exactly like Hikima's implementation
+        try:
+            # Use S3 loader to get area information
+            from ..data.data_loader import ExperimentDataLoader
+            loader = ExperimentDataLoader(self.config)
+            area_df = loader.load_area_info()
+            
+            if area_df is None or area_df.empty:
+                self.logger.error("Failed to load area_information.csv from S3")
+                raise ValueError("Area information not available")
+            
+            # Convert to dictionary: LocationID -> (longitude, latitude)
+            location_coords = {}
+            for _, row in area_df.iterrows():
+                loc_id = int(row['LocationID'])
+                # area_information.csv has columns: LocationID, longitude, latitude, Borough
+                longitude = float(row['longitude'])
+                latitude = float(row['latitude'])
+                location_coords[loc_id] = (longitude, latitude)
+            
+            self.logger.info(f"Loaded {len(location_coords)} location coordinates from S3")
+            return location_coords
+            
+        except Exception as e:
+            self.logger.error(f"Failed to load area information from S3: {e}", exc_info=True)
+            raise RuntimeError(f"Cannot proceed without area_information.csv: {e}")
     
     def _generate_locations_with_noise(
         self, 

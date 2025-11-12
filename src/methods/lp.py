@@ -26,7 +26,7 @@ class LPMethod(BasePricingMethod):
         super().__init__(config)
         
         # LP-specific parameters
-        self.price_grid_size = config.get('lp_price_grid_size', 20)
+        self.price_grid_size = config.get('lp_price_grid_size', 50)
         self.price_min_multiplier = config.get('lp_price_min_mult', 0.5)
         self.price_max_multiplier = config.get('lp_price_max_mult', 2.0)
         

@@ -1,4 +1,4 @@
-"""Simplified data processor."""
+"""Data processor for taxi trip data filtering and transformation."""
 
 import pandas as pd
 from datetime import datetime

@@ -227,8 +227,11 @@ class MinMaxCostFlowMethod(BasePricingMethod):
                 Cap_matrix[source, sink] += delta
                 Cap_matrix[sink, source] -= delta
             
-            # Shortest path phase (simplified - in full implementation would use Dijkstra)
-            # For large problems, this is computationally expensive, so we use the simplified version
+            # Shortest path phase - update potentials using Dijkstra's algorithm
+            # This maintains reduced cost optimality conditions
+            potential = self._update_potentials_dijkstra(
+                num_nodes, source, sink, Cost_matrix, Cap_matrix, potential, delta, epsilon
+            )
             
             # Update delta
             delta = 0.5 * delta
@@ -248,6 +251,63 @@ class MinMaxCostFlowMethod(BasePricingMethod):
             prices[i] = -(1/c[i]) * Flow[source, i] + d/c[i]
         
         return prices
+    
+    def _update_potentials_dijkstra(
+        self,
+        num_nodes: int,
+        source: int,
+        sink: int,
+        Cost_matrix: np.ndarray,
+        Cap_matrix: np.ndarray,
+        potential: np.ndarray,
+        delta: float,
+        epsilon: float
+    ) -> np.ndarray:
+        """
+        Update node potentials using Dijkstra's algorithm on residual network.
+        This maintains reduced cost optimality for delta-scaling.
+        """
+        # Compute reduced costs for all edges
+        reduced_costs = np.copy(Cost_matrix)
+        for i in range(num_nodes):
+            for j in range(num_nodes):
+                if Cap_matrix[i, j] >= delta:
+                    reduced_costs[i, j] = Cost_matrix[i, j] - potential[i] + potential[j]
+                else:
+                    reduced_costs[i, j] = np.inf
+        
+        # Run Dijkstra from source to compute shortest path distances
+        dist = np.full(num_nodes, np.inf)
+        dist[source] = 0
+        visited = np.zeros(num_nodes, dtype=bool)
+        
+        for _ in range(num_nodes):
+            # Find unvisited node with minimum distance
+            u = -1
+            min_dist = np.inf
+            for v in range(num_nodes):
+                if not visited[v] and dist[v] < min_dist:
+                    min_dist = dist[v]
+                    u = v
+            
+            if u == -1 or min_dist == np.inf:
+                break
+                
+            visited[u] = True
+            
+            # Update distances to neighbors
+            for v in range(num_nodes):
+                if not visited[v] and Cap_matrix[u, v] >= delta:
+                    new_dist = dist[u] + reduced_costs[u, v]
+                    if new_dist < dist[v]:
+                        dist[v] = new_dist
+        
+        # Update potentials: potential[v] = potential[v] - dist[v]
+        for v in range(num_nodes):
+            if dist[v] < np.inf:
+                potential[v] = potential[v] - dist[v]
+        
+        return potential
     
     def _solve_sigmoid(
         self,
@@ -424,6 +484,11 @@ class MinMaxCostFlowMethod(BasePricingMethod):
                 excess[source] += delta
                 Cap_matrix[source, sink] += delta
                 Cap_matrix[sink, source] -= delta
+            
+            # Shortest path phase - update potentials using Dijkstra's algorithm
+            potential = self._update_potentials_dijkstra(
+                num_nodes, source, sink, Cost_matrix, Cap_matrix, potential, delta, epsilon
+            )
             
             # Update delta
             delta = 0.5 * delta

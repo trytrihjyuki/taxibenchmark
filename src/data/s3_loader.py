@@ -1,4 +1,4 @@
-"""Simplified S3 data loader."""
+"""S3 data loader for taxi trip data and supporting datasets."""
 
 import os
 from datetime import date
@@ -15,7 +15,7 @@ from ..core.types import VehicleType, Borough
 
 
 class S3DataLoader:
-    """Simplified S3 data loader that avoids pickle issues."""
+    """S3 data loader for taxi benchmark datasets."""
     
     def __init__(self, config=None):
         """Initialize loader."""
