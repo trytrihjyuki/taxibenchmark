@@ -235,11 +235,11 @@ class ExperimentRunner:
                     def timeout_handler(signum, frame):
                         raise TimeoutError("Scenario processing timed out")
                     
-                    # Set 5 minute timeout for scenario processing
+                    # Set 15 minute timeout for scenario processing
                     signal.signal(signal.SIGALRM, timeout_handler)
-                    signal.alarm(300)  # 5 minutes
+                    signal.alarm(900)  # 15 minutes
                     timeout_active = True
-                    self.logger.debug("Set 5-minute timeout for scenario processing")
+                    self.logger.debug("Set 15-minute timeout for scenario processing")
                 else:
                     self.logger.debug("Timeout not available on Windows, proceeding without timeout")
                 
@@ -612,71 +612,8 @@ class ExperimentRunner:
             else:
                 self.logger.debug(f"Skipping parallel processing: workers={self.config.num_workers}, scenarios={len(results)}, simulation_parallel={use_simulation_parallel}")
         
-        # This ensures we compare each method against the SAME optimal benchmark
-        self._share_lp_optimal_across_methods(results)
-        
         self.logger.debug(f"_process_time_window returning {len(results)} results")
         return results
-    
-    def _share_lp_optimal_across_methods(self, results: List[Dict]):
-        """
-        Share LP's optimal value across all methods in the same scenario.
-        
-        This ensures that optimality calculations compare each method's realized revenue
-        against LP's theoretical optimal for THE SAME scenario, not averaged across scenarios.
-        
-        This fixes the issue where MinMaxCostFlow appeared to exceed 100% optimality.
-        """
-        if not results:
-            return
-        
-        # Group results by borough (all methods in same borough/time window share same optimal)
-        borough_groups = {}
-        for result in results:
-            borough = result.get('borough', 'unknown')
-            if borough not in borough_groups:
-                borough_groups[borough] = []
-            borough_groups[borough].append(result)
-        
-        # For each borough group, share LP's optimal value
-        for borough, borough_results in borough_groups.items():
-            # Find LP's optimal values for each acceptance function
-            lp_opt_values = {'PL': None, 'Sigmoid': None}
-            
-            for result in borough_results:
-                if result.get('method') == 'LP':
-                    for acc_func in ['PL', 'Sigmoid']:
-                        if acc_func in result and 'opt_value' in result[acc_func]:
-                            lp_opt_values[acc_func] = result[acc_func]['opt_value']
-                            self.logger.debug(f"Found LP optimal for {acc_func}: ${lp_opt_values[acc_func]:.2f}")
-            
-            # If we have LP optimal values, apply them to all methods and recalculate optimality
-            if any(v is not None for v in lp_opt_values.values()):
-                for result in borough_results:
-                    method = result.get('method', 'unknown')
-                    
-                    for acc_func in ['PL', 'Sigmoid']:
-                        if acc_func in result:
-                            func_result = result[acc_func]
-                            lp_opt = lp_opt_values[acc_func]
-                            
-                            if lp_opt is not None:
-                                # Store the LP optimal value
-                                func_result['opt_value'] = float(lp_opt)
-                                
-                                # Recalculate optimality metrics correctly
-                                realized_revenue = func_result.get('avg_revenue', 0.0)
-                                
-                                # Gap: how much below optimal (positive = below optimal)
-                                func_result['optimality_gap'] = float(lp_opt - realized_revenue)
-                                
-                                # Ratio: what percentage of optimal was achieved (should be ≤ 1.0 for non-LP)
-                                func_result['optimality_ratio'] = float(realized_revenue / lp_opt) if lp_opt > 0 else 0.0
-                                
-                                self.logger.debug(
-                                    f"{method} {acc_func}: Realized=${realized_revenue:.2f}, "
-                                    f"Optimal=${lp_opt:.2f}, Ratio={func_result['optimality_ratio']*100:.1f}%"
-                                )
     
     def _run_parallel(self, scenarios: List[Dict]) -> List[Dict]:
         """Run scenarios in parallel with proper exception handling."""
@@ -696,7 +633,7 @@ class ExperimentRunner:
                 
                 for future in futures:
                     try:
-                        result = future.result(timeout=300)  # 5 minute timeout per scenario
+                        result = future.result(timeout=900)  # 15 minute timeout per scenario
                         results.append(result)
                         self.logger.debug(f"Completed scenario {futures[future]+1}/{len(args_list)}")
                     except Exception as e:
@@ -982,10 +919,8 @@ class ExperimentRunner:
                     if matching_results and i < len(matching_results):
                         was_matched = 1 if matching_results[i] >= 0 else 0
                     
-                    # Get optimal value if available (from LP method)
+                    # NEW: Store optimal value for LP method only (gap/ratio computed during analysis)
                     opt_value = func_results.get('opt_value', None)
-                    optimality_gap = func_results.get('optimality_gap', None)
-                    optimality_ratio = func_results.get('optimality_ratio', None)
                     
                     decision = {
                         'time_window_idx': tw_idx,
@@ -1000,9 +935,8 @@ class ExperimentRunner:
                         'was_matched': was_matched,           # New: whether actually matched in optimization
                         'profit': profit,                     # New: profit from this decision
                         'compute_time': computation_time,     # New: computation time for this method
-                        'opt_value': opt_value,               # New: optimal objective value (if available)
-                        'optimality_gap': optimality_gap,     # New: gap from optimal (if available)
-                        'optimality_ratio': optimality_ratio  # New: ratio to optimal (if available)
+                        'opt_value': opt_value,               # New: LP optimal value (None for other methods)
+                        # Note: optimality_gap and optimality_ratio will be computed during analysis
                     }
                     decisions.append(decision)
         

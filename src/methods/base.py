@@ -207,11 +207,11 @@ class BasePricingMethod(ABC):
                     'num_simulations': num_simulations
                 }
                 
-                # Add optimal value if available
+                # NEW: Store opt_value array for LP method (for aggregation later)
                 if opt_value is not None:
                     func_results['opt_value'] = float(opt_value)
-                    func_results['optimality_gap'] = float(opt_value - np.mean(revenues)) if opt_value > 0 else 0.0
-                    func_results['optimality_ratio'] = float(np.mean(revenues) / opt_value) if opt_value > 0 else 0.0
+                    func_results['revenues'] = revenues  # Store individual simulation revenues
+                    # Note: Optimality metrics will be computed during aggregation
             else:
                 # Single run using Hikima's approach
                 accepted = np.zeros(len(acceptance_probs))
@@ -250,11 +250,11 @@ class BasePricingMethod(ABC):
                     'num_simulations': 1
                 }
                 
-                # Add optimal value if available (from LP solver)
+                # NEW: Store opt_value for LP method (for aggregation later)
                 if opt_value is not None:
                     func_results['opt_value'] = float(opt_value)
-                    func_results['optimality_gap'] = float(opt_value - realized_value) if opt_value > 0 else 0.0
-                    func_results['optimality_ratio'] = float(realized_value / opt_value) if opt_value > 0 else 0.0
+                    func_results['revenues'] = [realized_value]  # Single simulation revenue
+                    # Note: Optimality metrics will be computed during aggregation
             
             sim_time = time() - sim_start
             func_total_time = time() - func_start
@@ -527,10 +527,10 @@ class BasePricingMethod(ABC):
                 }
                 
                 # Collect results as they complete
-                for future in as_completed(future_to_worker, timeout=600):  # 10 minute total timeout
+                for future in as_completed(future_to_worker, timeout=900):  # 15 minute total timeout
                     worker_id = future_to_worker[future]
                     try:
-                        worker_results = future.result(timeout=300)  # 5 minute timeout per worker
+                        worker_results = future.result(timeout=900)  # 15 minute timeout per worker
                         
                         # Validate worker results
                         if not isinstance(worker_results, dict):

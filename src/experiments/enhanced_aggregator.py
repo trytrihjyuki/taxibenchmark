@@ -108,10 +108,14 @@ class EnhancedResultsAggregator:
         
         self.logger.info("🏆 BY OBJECTIVE VALUE (Revenue):")
         for i, (method, obj_val) in enumerate(obj_ranked):
-            # Add optimality ratio if available
-            opt_ratio = method_stats[method].get('optimality_ratios', {}).get('mean', None)
-            if opt_ratio is not None:
-                self.logger.info(f"  #{i+1}: {method:<15} - ${obj_val:8.2f} (optimality: {opt_ratio*100:.1f}%)")
+            # Add optimality ratio if available (NEW structure)
+            opt_metrics = method_stats[method].get('optimality_metrics', {})
+            if opt_metrics:
+                opt_ratio = opt_metrics.get('optimality_ratio', None)
+                if opt_ratio is not None:
+                    self.logger.info(f"  #{i+1}: {method:<15} - ${obj_val:8.2f} (optimality: {opt_ratio*100:.1f}%)")
+                else:
+                    self.logger.info(f"  #{i+1}: {method:<15} - ${obj_val:8.2f}")
             else:
                 self.logger.info(f"  #{i+1}: {method:<15} - ${obj_val:8.2f}")
         
@@ -120,7 +124,7 @@ class EnhancedResultsAggregator:
         for i, (method, eff_val) in enumerate(eff_ranked):
             self.logger.info(f"  #{i+1}: {method:<15} - ${eff_val:8.2f}")
         
-        # Log optimal value statistics if LP method is present
+        # NEW: Log optimal value statistics using new structure
         if 'LP' in method_stats and 'optimal_values' in method_stats['LP']:
             self.logger.info("")
             self.logger.info("📊 OPTIMALITY ANALYSIS (LP as benchmark):")
@@ -128,9 +132,10 @@ class EnhancedResultsAggregator:
             self.logger.info(f"  LP Optimal Value: ${lp_opt_val:8.2f}")
             
             for method in method_names:
-                if method != 'LP' and 'optimality_ratios' in method_stats[method]:
-                    opt_ratio = method_stats[method]['optimality_ratios']['mean']
-                    opt_gap = method_stats[method]['optimality_gaps']['mean']
+                if 'optimality_metrics' in method_stats[method]:
+                    opt_metrics = method_stats[method]['optimality_metrics']
+                    opt_ratio = opt_metrics['optimality_ratio']
+                    opt_gap = opt_metrics['optimality_gap']
                     self.logger.info(f"  {method:<15} - {opt_ratio*100:5.1f}% of optimal (gap: ${opt_gap:6.2f})")
         
         self.logger.info("=" * 60)
@@ -154,12 +159,11 @@ class EnhancedResultsAggregator:
             method = result.get('method', 'unknown')
             if method not in method_data:
                 method_data[method] = {
-                    'objective_values': [],
+                    'objective_values': [],  # Average revenues per scenario
+                    'revenues': [],           # Individual simulation revenues (for LP)
+                    'opt_values': [],         # Optimal values per scenario (for LP)
                     'computation_times': [],
                     'acceptance_rates': [],
-                    'opt_values': [],
-                    'optimality_gaps': [],
-                    'optimality_ratios': [],
                     'num_scenarios': 0
                 }
             
@@ -169,13 +173,11 @@ class EnhancedResultsAggregator:
                     method_data[method]['objective_values'].append(result[acc_func]['avg_revenue'])
                     method_data[method]['acceptance_rates'].append(result[acc_func]['avg_acceptance_rate'])
                     
-                    # Collect optimal value metrics if available
+                    # NEW: Collect optimal values and individual revenues for LP method
                     if 'opt_value' in result[acc_func]:
                         method_data[method]['opt_values'].append(result[acc_func]['opt_value'])
-                    if 'optimality_gap' in result[acc_func]:
-                        method_data[method]['optimality_gaps'].append(result[acc_func]['optimality_gap'])
-                    if 'optimality_ratio' in result[acc_func]:
-                        method_data[method]['optimality_ratios'].append(result[acc_func]['optimality_ratio'])
+                    if 'revenues' in result[acc_func]:
+                        method_data[method]['revenues'].extend(result[acc_func]['revenues'])
             
             # Computation time (per scenario, not per simulation)
             if 'computation_time' in result:
@@ -208,13 +210,25 @@ class EnhancedResultsAggregator:
                 }
             }
             
-            # Add optimal value statistics if available
+            # Store optimal values for LP method
             if data['opt_values']:
                 method_stats[method]['optimal_values'] = self._calculate_stats_with_sum(data['opt_values'])
-            if data['optimality_gaps']:
-                method_stats[method]['optimality_gaps'] = self._calculate_stats_without_sum(data['optimality_gaps'])
-            if data['optimality_ratios']:
-                method_stats[method]['optimality_ratios'] = self._calculate_stats_without_sum(data['optimality_ratios'])
+        
+        # NEW: Compute optimality metrics AFTER collecting all data
+        # This compares average revenues with average optimal values
+        if 'LP' in method_stats and 'optimal_values' in method_stats['LP']:
+            avg_lp_opt = method_stats['LP']['optimal_values']['mean']
+            
+            for method in method_stats:
+                avg_revenue = method_stats[method]['objective_values']['mean']
+                
+                # Compute optimality metrics
+                method_stats[method]['optimality_metrics'] = {
+                    'avg_optimal_value': float(avg_lp_opt),
+                    'avg_realized_revenue': float(avg_revenue),
+                    'optimality_gap': float(avg_lp_opt - avg_revenue),
+                    'optimality_ratio': float(avg_revenue / avg_lp_opt) if avg_lp_opt > 0 else 0.0
+                }
         
         # Rank methods correctly
         method_stats = self._rank_methods(method_stats)
