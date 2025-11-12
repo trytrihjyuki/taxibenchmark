@@ -38,7 +38,7 @@ class LPMethod(BasePricingMethod):
         self,
         scenario_data: Dict[str, Any],
         acceptance_function: str
-    ) -> np.ndarray:
+    ) -> Tuple[np.ndarray, float]:
         """
         Compute prices using the Gupta-Nagarajan LP formulation optimized for specific acceptance function.
         
@@ -47,7 +47,7 @@ class LPMethod(BasePricingMethod):
             acceptance_function: 'PL' or 'Sigmoid' - which function to optimize for
             
         Returns:
-            Array of prices for each requester
+            Tuple of (prices array, optimal objective value)
         """
         n_requesters = scenario_data['num_requesters']
         n_taxis = scenario_data['num_taxis']
@@ -56,9 +56,9 @@ class LPMethod(BasePricingMethod):
         
         # Handle edge cases
         if n_requesters == 0:
-            return np.array([])
+            return np.array([]), 0.0
         if n_taxis == 0:
-            return np.zeros(n_requesters)
+            return np.zeros(n_requesters), 0.0
         
         # Generate price grids for each requester
         price_grids = self._generate_price_grids(trip_amounts)
@@ -80,14 +80,19 @@ class LPMethod(BasePricingMethod):
         if prob.status != pulp.LpStatusOptimal:
             self.logger.warning(f"LP did not find optimal solution: {pulp.LpStatus[prob.status]}")
             # Return baseline prices if LP fails
-            return trip_amounts * 1.2
+            return trip_amounts * 1.2, 0.0
+        
+        # Extract optimal objective value
+        opt_value = pulp.value(prob.objective) if prob.objective else 0.0
         
         # Extract prices from solution
         prices = self._extract_prices_from_solution(
             y_vars, price_grids, n_requesters
         )
         
-        return prices
+        self.logger.info(f"{acceptance_function} LP optimal value: ${opt_value:.2f}")
+        
+        return prices, opt_value
     
     def _generate_price_grids(self, trip_amounts: np.ndarray) -> Dict[int, np.ndarray]:
         """

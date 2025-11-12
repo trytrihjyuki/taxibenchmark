@@ -40,7 +40,7 @@ class BasePricingMethod(ABC):
         self,
         scenario_data: Dict[str, Any],
         acceptance_function: str
-    ) -> np.ndarray:
+    ):
         """
         Compute prices for all requesters optimized for specific acceptance function.
         
@@ -49,7 +49,9 @@ class BasePricingMethod(ABC):
             acceptance_function: 'PL' or 'Sigmoid' - which function to optimize for
             
         Returns:
-            Array of prices for each requester
+            Either:
+            - np.ndarray: Array of prices for each requester (backward compatible)
+            - Tuple[np.ndarray, float]: (prices, optimal_objective_value) for methods that compute optimal
         """
         pass
     
@@ -91,10 +93,20 @@ class BasePricingMethod(ABC):
             
             # Compute prices optimized for this specific acceptance function
             price_start = time()
-            prices = self.compute_prices(scenario_data, acceptance_function)
+            compute_result = self.compute_prices(scenario_data, acceptance_function)
+            
+            # Handle both return types: just prices or (prices, opt_value)
+            if isinstance(compute_result, tuple):
+                prices, opt_value = compute_result
+            else:
+                prices = compute_result
+                opt_value = None  # Method doesn't compute optimal value
+            
             price_time = time() - price_start
             
             self.logger.debug(f"{acceptance_function} price computation: {price_time:.3f}s")
+            if opt_value is not None:
+                self.logger.info(f"{acceptance_function} optimal objective value: ${opt_value:.2f}")
             
             # Record computation time
             computation_time = time() - func_start
@@ -194,6 +206,12 @@ class BasePricingMethod(ABC):
                     'computation_time': computation_time,
                     'num_simulations': num_simulations
                 }
+                
+                # Add optimal value if available
+                if opt_value is not None:
+                    func_results['opt_value'] = float(opt_value)
+                    func_results['optimality_gap'] = float(opt_value - np.mean(revenues)) if opt_value > 0 else 0.0
+                    func_results['optimality_ratio'] = float(np.mean(revenues) / opt_value) if opt_value > 0 else 0.0
             else:
                 # Single run using Hikima's approach
                 accepted = np.zeros(len(acceptance_probs))
@@ -203,7 +221,7 @@ class BasePricingMethod(ABC):
                         accepted[i] = 1
                 
                 # Calculate objective value using Hikima's value_eval function
-                opt_value, matched_edges, rewards = self._compute_objective_value_hikima(
+                realized_value, matched_edges, rewards = self._compute_objective_value_hikima(
                     prices, accepted, scenario_data['edge_weights'],
                     scenario_data['num_requesters'], scenario_data['num_taxis']
                 )
@@ -223,7 +241,7 @@ class BasePricingMethod(ABC):
                     'prices': prices.tolist() if len(prices) > 0 else [],
                     'acceptance_probs': acceptance_probs.tolist() if len(acceptance_probs) > 0 else [],
                     'matching_results': matching_results.tolist(),  # Add matching results for decision tracking
-                    'avg_revenue': float(opt_value),
+                    'avg_revenue': float(realized_value),
                     'std_revenue': 0.0,
                     'avg_matching_rate': float(len(matched_edges) / len(accepted)) if len(accepted) > 0 else 0,
                     'std_matching_rate': 0.0,
@@ -231,6 +249,12 @@ class BasePricingMethod(ABC):
                     'computation_time': computation_time,
                     'num_simulations': 1
                 }
+                
+                # Add optimal value if available (from LP solver)
+                if opt_value is not None:
+                    func_results['opt_value'] = float(opt_value)
+                    func_results['optimality_gap'] = float(opt_value - realized_value) if opt_value > 0 else 0.0
+                    func_results['optimality_ratio'] = float(realized_value / opt_value) if opt_value > 0 else 0.0
             
             sim_time = time() - sim_start
             func_total_time = time() - func_start

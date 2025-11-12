@@ -919,6 +919,11 @@ class ExperimentRunner:
                     if matching_results and i < len(matching_results):
                         was_matched = 1 if matching_results[i] >= 0 else 0
                     
+                    # Get optimal value if available (from LP method)
+                    opt_value = func_results.get('opt_value', None)
+                    optimality_gap = func_results.get('optimality_gap', None)
+                    optimality_ratio = func_results.get('optimality_ratio', None)
+                    
                     decision = {
                         'time_window_idx': tw_idx,
                         'time_window': result.get('time_window', ''),
@@ -932,6 +937,9 @@ class ExperimentRunner:
                         'was_matched': was_matched,           # New: whether actually matched in optimization
                         'profit': profit,                     # New: profit from this decision
                         'compute_time': computation_time,     # New: computation time for this method
+                        'opt_value': opt_value,               # New: optimal objective value (if available)
+                        'optimality_gap': optimality_gap,     # New: gap from optimal (if available)
+                        'optimality_ratio': optimality_ratio  # New: ratio to optimal (if available)
                     }
                     decisions.append(decision)
         
