@@ -132,6 +132,22 @@ def parse_arguments():
         help='Logging level'
     )
     
+    # LP-specific parameters
+    parser.add_argument(
+        '--lp-price-grid-size',
+        type=int,
+        default=30,
+        help='LP price grid size (number of discretization points, default: 30)'
+    )
+    
+    parser.add_argument(
+        '--lp-solver',
+        type=str,
+        default='cbc',
+        choices=['cbc', 'highs', 'gurobi', 'cplex'],
+        help='LP solver to use (default: cbc, highs is faster if available)'
+    )
+    
     return parser.parse_args()
 
 
@@ -200,7 +216,9 @@ def main():
             time_delta=args.time_delta,
             time_window_size=args.time_window_size,
             num_iter=args.num_iter,
-            num_workers=args.num_workers
+            num_workers=args.num_workers,
+            lp_price_grid_size=args.lp_price_grid_size,
+            lp_solver=args.lp_solver
         )
         
         # Log configuration

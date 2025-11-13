@@ -31,8 +31,8 @@ class LPMethod(BasePricingMethod):
         self.price_min_multiplier = config.get('lp_price_min_mult', 0.5)
         self.price_max_multiplier = config.get('lp_price_max_mult', 2.0)
         
-        # Solver selection (default to HiGHS for better performance)
-        self.solver_name = config.get('lp_solver', 'highs')  # 'cbc', 'highs', 'gurobi', 'cplex'
+        # Solver selection (default to CBC for compatibility, can override with 'highs', 'gurobi', 'cplex')
+        self.solver_name = config.get('lp_solver', 'cbc')  # 'cbc', 'highs', 'gurobi', 'cplex'
         
     def get_method_name(self) -> str:
         """Get method name."""
@@ -113,6 +113,11 @@ class LPMethod(BasePricingMethod):
         try:
             # Try to create solver with msg=False (suppress output)
             solver = solver_class(msg=False)
+            
+            # Check if solver is actually available
+            if not solver.available():
+                raise Exception(f"Solver binary not found")
+            
             return solver
         except Exception as e:
             # Fallback to CBC if solver not available
