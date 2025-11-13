@@ -142,16 +142,63 @@ class EnhancedResultsAggregator:
         
         return method_stats
     
+    def _log_separated_rankings(self, method_stats_by_acc: Dict[str, Dict]):
+        """Log rankings separated by acceptance function (PL and Sigmoid)."""
+        if not method_stats_by_acc:
+            return
+        
+        self.logger.info("")
+        self.logger.info("=" * 70)
+        self.logger.info("SEPARATED RESULTS BY ACCEPTANCE FUNCTION (CORRECTED)")
+        self.logger.info("=" * 70)
+        
+        for acc_func in ['PL', 'Sigmoid']:
+            # Filter methods for this acceptance function
+            acc_methods = {k: v for k, v in method_stats_by_acc.items() if k.endswith(f"_{acc_func}")}
+            if not acc_methods:
+                continue
+            
+            # Sort by revenue (descending)
+            sorted_methods = sorted(acc_methods.items(), key=lambda x: x[1]['objective_values']['mean'], reverse=True)
+            
+            self.logger.info("")
+            self.logger.info(f"🏆 BY OBJECTIVE VALUE ({acc_func} Acceptance):")
+            
+            for i, (method_key, stats) in enumerate(sorted_methods):
+                method_name = stats['method']
+                obj_val = stats['objective_values']['mean']
+                
+                opt_metrics = stats.get('optimality_metrics', {})
+                if opt_metrics:
+                    opt_ratio = opt_metrics.get('optimality_ratio', None)
+                    opt_gap = opt_metrics.get('optimality_gap', None)
+                    if opt_ratio is not None:
+                        self.logger.info(f"  #{i+1}: {method_name:<15} - ${obj_val:8.2f} "
+                                       f"(opt: {opt_ratio*100:5.1f}%, gap: ${opt_gap:6.2f})")
+                    else:
+                        self.logger.info(f"  #{i+1}: {method_name:<15} - ${obj_val:8.2f}")
+                else:
+                    self.logger.info(f"  #{i+1}: {method_name:<15} - ${obj_val:8.2f}")
+            
+            # Log optimal value if available
+            lp_key = f"LP_{acc_func}"
+            if lp_key in method_stats_by_acc and 'optimal_values' in method_stats_by_acc[lp_key]:
+                lp_opt_val = method_stats_by_acc[lp_key]['optimal_values']['mean']
+                self.logger.info(f"  LP Optimal Value ({acc_func}): ${lp_opt_val:8.2f}")
+        
+        self.logger.info("=" * 70)
+    
     def create_comprehensive_summary(self) -> Dict[str, Any]:
-        """Create comprehensive experiment summary with CORRECT timing and ranking."""
+        """Create comprehensive experiment summary with CORRECT timing and ranking, SEPARATED by acceptance function."""
         # Record experiment end time for wall-clock calculation
         self.experiment_end_time = datetime.now()
         
         # Calculate CORRECT total computation time (wall-clock, not sum of parallel times)
         wall_clock_duration = (self.experiment_end_time - self.experiment_start_time).total_seconds()
         
-        # Extract all metrics by method
+        # Extract all metrics by method AND acceptance function (CRITICAL FIX)
         method_data = {}
+        method_data_by_acc = {}  # NEW: Separate tracking by acceptance function
         total_scenarios = len(self.results)
         num_simulations = self.config.get('num_iter', 1)
         
@@ -159,7 +206,7 @@ class EnhancedResultsAggregator:
             method = result.get('method', 'unknown')
             if method not in method_data:
                 method_data[method] = {
-                    'objective_values': [],  # Average revenues per scenario
+                    'objective_values': [],  # Average revenues per scenario (MIXED for backward compat)
                     'revenues': [],           # Individual simulation revenues (for LP)
                     'opt_values': [],         # Optimal values per scenario (for LP)
                     'computation_times': [],
@@ -167,7 +214,32 @@ class EnhancedResultsAggregator:
                     'num_scenarios': 0
                 }
             
-            # Collect data for both PL and Sigmoid
+            # NEW: Separate tracking by acceptance function
+            for acc_func in ['PL', 'Sigmoid']:
+                if acc_func in result:
+                    method_key = f"{method}_{acc_func}"
+                    if method_key not in method_data_by_acc:
+                        method_data_by_acc[method_key] = {
+                            'method': method,
+                            'acceptance_function': acc_func,
+                            'objective_values': [],
+                            'revenues': [],
+                            'opt_values': [],
+                            'acceptance_rates': [],
+                            'num_scenarios': 0
+                        }
+                    
+                    # Collect separated data
+                    method_data_by_acc[method_key]['objective_values'].append(result[acc_func]['avg_revenue'])
+                    method_data_by_acc[method_key]['acceptance_rates'].append(result[acc_func]['avg_acceptance_rate'])
+                    method_data_by_acc[method_key]['num_scenarios'] += 1
+                    
+                    if 'opt_value' in result[acc_func]:
+                        method_data_by_acc[method_key]['opt_values'].append(result[acc_func]['opt_value'])
+                    if 'revenues' in result[acc_func]:
+                        method_data_by_acc[method_key]['revenues'].extend(result[acc_func]['revenues'])
+            
+            # Collect data for both PL and Sigmoid (MIXED for backward compatibility)
             for acc_func in ['PL', 'Sigmoid']:
                 if acc_func in result:
                     method_data[method]['objective_values'].append(result[acc_func]['avg_revenue'])
@@ -230,7 +302,42 @@ class EnhancedResultsAggregator:
                     'optimality_ratio': float(avg_revenue / avg_lp_opt) if avg_lp_opt > 0 else 0.0
                 }
         
-        # Rank methods correctly
+        # NEW: Build separate stats for PL and Sigmoid
+        method_stats_by_acc = {}
+        for method_key, data in method_data_by_acc.items():
+            method_stats_by_acc[method_key] = {
+                'method': data['method'],
+                'acceptance_function': data['acceptance_function'],
+                'objective_values': self._calculate_stats_with_sum(data['objective_values']),
+                'acceptance_rates': self._calculate_stats_without_sum(data['acceptance_rates']),
+                'scenarios_completed': data['num_scenarios']
+            }
+            
+            # Add optimal values if available
+            if data['opt_values']:
+                method_stats_by_acc[method_key]['optimal_values'] = self._calculate_stats_with_sum(data['opt_values'])
+        
+        # Compute optimality metrics for each acceptance function separately
+        for acc_func in ['PL', 'Sigmoid']:
+            lp_key = f"LP_{acc_func}"
+            if lp_key in method_stats_by_acc and 'optimal_values' in method_stats_by_acc[lp_key]:
+                avg_lp_opt = method_stats_by_acc[lp_key]['optimal_values']['mean']
+                
+                # Compare all methods using this acceptance function to LP optimal for that function
+                for method_key in method_stats_by_acc:
+                    if method_key.endswith(f"_{acc_func}"):
+                        avg_revenue = method_stats_by_acc[method_key]['objective_values']['mean']
+                        method_stats_by_acc[method_key]['optimality_metrics'] = {
+                            'avg_optimal_value': float(avg_lp_opt),
+                            'avg_realized_revenue': float(avg_revenue),
+                            'optimality_gap': float(avg_lp_opt - avg_revenue),
+                            'optimality_ratio': float(avg_revenue / avg_lp_opt) if avg_lp_opt > 0 else 0.0
+                        }
+        
+        # Log separated rankings
+        self._log_separated_rankings(method_stats_by_acc)
+        
+        # Rank methods correctly (mixed for backward compatibility)
         method_stats = self._rank_methods(method_stats)
         
         # Overall performance (across all methods)
@@ -276,6 +383,7 @@ class EnhancedResultsAggregator:
             'results_basic_analysis': {
                 'total_methods': len(method_stats),
                 'methods_performance': method_stats,
+                'methods_performance_by_acceptance': method_stats_by_acc,  # NEW: Separated stats
                 'overall_performance': {
                     'objective_values': self._calculate_stats_with_sum(all_obj_values),
                     'computation_times': {

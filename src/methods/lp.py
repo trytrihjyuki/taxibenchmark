@@ -26,9 +26,13 @@ class LPMethod(BasePricingMethod):
         super().__init__(config)
         
         # LP-specific parameters
-        self.price_grid_size = config.get('lp_price_grid_size', 80)
+        # Trade-off: Slightly less granular pricing, but still adequate
+        self.price_grid_size = config.get('lp_price_grid_size', 50)
         self.price_min_multiplier = config.get('lp_price_min_mult', 0.5)
         self.price_max_multiplier = config.get('lp_price_max_mult', 2.0)
+        
+        # Solver selection (default to HiGHS for better performance)
+        self.solver_name = config.get('lp_solver', 'highs')  # 'cbc', 'highs', 'gurobi', 'cplex'
         
     def get_method_name(self) -> str:
         """Get method name."""
@@ -74,8 +78,9 @@ class LPMethod(BasePricingMethod):
             price_grids, acceptance_probs
         )
         
-        # Solve the LP
-        prob.solve(pulp.PULP_CBC_CMD(msg=False))
+        # Solve the LP with selected solver
+        solver = self._get_solver()
+        prob.solve(solver)
         
         if prob.status != pulp.LpStatusOptimal:
             self.logger.warning(f"LP did not find optimal solution: {pulp.LpStatus[prob.status]}")
@@ -93,6 +98,27 @@ class LPMethod(BasePricingMethod):
         self.logger.info(f"{acceptance_function} LP optimal value: ${opt_value:.2f}")
         
         return prices, opt_value
+    
+    def _get_solver(self):
+        """Get LP solver based on configuration with fallback to CBC."""
+        solver_map = {
+            'cbc': pulp.PULP_CBC_CMD,
+            'highs': pulp.HiGHS_CMD,
+            'gurobi': pulp.GUROBI_CMD,
+            'cplex': pulp.CPLEX_CMD
+        }
+        
+        solver_class = solver_map.get(self.solver_name.lower(), pulp.PULP_CBC_CMD)
+        
+        try:
+            # Try to create solver with msg=False (suppress output)
+            solver = solver_class(msg=False)
+            return solver
+        except Exception as e:
+            # Fallback to CBC if solver not available
+            if self.solver_name.lower() != 'cbc':
+                self.logger.warning(f"Solver '{self.solver_name}' not available ({e}), falling back to CBC")
+            return pulp.PULP_CBC_CMD(msg=False)
     
     def _generate_price_grids(self, trip_amounts: np.ndarray) -> Dict[int, np.ndarray]:
         """
@@ -130,22 +156,28 @@ class LPMethod(BasePricingMethod):
         """
         Calculate acceptance probability for each (requester, price_index) pair using specified acceptance function.
         
+        PERFORMANCE: Partially vectorized for efficiency.
+        
         Returns:
             Dictionary mapping (requester_id, price_index) to acceptance probability
         """
         acceptance_probs = {}
         
+        # Process each requester (can't fully vectorize due to different grid sizes per requester)
         for i, amount in enumerate(trip_amounts):
-            for j, price in enumerate(price_grids[i]):
-                if acceptance_function == 'PL':
-                    # Piecewise linear
-                    prob = max(0, min(1, -2.0 / amount * price + 3.0))
-                else:  # Sigmoid
-                    # Sigmoid acceptance - exact match to Hikima implementation
-                    exponent = (-price + self.sigmoid_beta * amount) / (self.sigmoid_gamma * abs(amount))
-                    prob = 1.0 - (1.0 / (1.0 + np.exp(exponent)))
-                
-                acceptance_probs[(i, j)] = prob
+            prices = price_grids[i]  # Array of prices for this requester
+            
+            if acceptance_function == 'PL':
+                # Vectorized piecewise linear: P(accept) = max(0, min(1, -2/v * p + 3))
+                probs = np.clip(-2.0 / amount * prices + 3.0, 0.0, 1.0)
+            else:  # Sigmoid
+                # Vectorized sigmoid acceptance
+                exponents = (-prices + self.sigmoid_beta * amount) / (self.sigmoid_gamma * abs(amount))
+                probs = 1.0 - (1.0 / (1.0 + np.exp(exponents)))
+            
+            # Store in dictionary format expected by LP builder
+            for j, prob in enumerate(probs):
+                acceptance_probs[(i, j)] = float(prob)
         
         return acceptance_probs
     
