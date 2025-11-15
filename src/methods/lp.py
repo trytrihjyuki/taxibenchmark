@@ -95,7 +95,23 @@ class LPMethod(BasePricingMethod):
             y_vars, price_grids, n_requesters
         )
         
-        self.logger.info(f"{acceptance_function} LP optimal value: ${opt_value:.2f}")
+        # CRITICAL DEBUG: Manual verification of objective
+        manual_obj = 0.0
+        for c in range(n_requesters):
+            for t in range(n_taxis):
+                for pi_idx in range(len(price_grids[c])):
+                    x_val = x_vars[(c, t, pi_idx)].varValue or 0
+                    if x_val > 1e-6:
+                        price = price_grids[c][pi_idx]
+                        profit = price + edge_weights[c, t]
+                        manual_obj += profit * x_val
+        
+        self.logger.info(f"{acceptance_function} LP solver optimal: ${opt_value:.2f}")
+        self.logger.info(f"{acceptance_function} Manual objective calc: ${manual_obj:.2f}")
+        
+        if abs(manual_obj - opt_value) > 1.0:
+            self.logger.error(f"{acceptance_function} MISMATCH: Manual=${manual_obj:.2f} vs Solver=${opt_value:.2f}")
+            self.logger.error("BUG in LP objective calculation!")
         
         return prices, opt_value
     
@@ -222,13 +238,15 @@ class LPMethod(BasePricingMethod):
                     )
         
         # Objective: maximize expected profit
+        # NOTE: edge_weights are ALREADY NEGATIVE (costs), so we ADD them directly
         objective = 0
         for c in range(n_requesters):
             for t in range(n_taxis):
                 for pi_idx in range(len(price_grids[c])):
                     price = price_grids[c][pi_idx]
-                    cost = -edge_weights[c, t]  # Cost is negative of weight
-                    profit = price - cost
+                    # edge_weights[c,t] is already negative (cost)
+                    # Objective: price + edge_weight (matches Hikima's value_eval)
+                    profit = price + edge_weights[c, t]
                     objective += profit * x_vars[(c, t, pi_idx)]
         
         prob += objective, "Total_expected_profit"
