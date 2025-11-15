@@ -255,7 +255,6 @@ class LPMethod(BasePricingMethod):
         
         # Objective: maximize expected profit
         # NOTE: edge_weights are ALREADY NEGATIVE (costs), so we ADD them directly
-        # CRITICAL: Include acceptance probability in objective (not in constraints)
         objective = 0
         for c in range(n_requesters):
             for t in range(n_taxis):
@@ -263,9 +262,7 @@ class LPMethod(BasePricingMethod):
                     price = price_grids[c][pi_idx]
                     # edge_weights[c,t] is already negative (cost)
                     profit = price + edge_weights[c, t]
-                    # Expected value: profit * P(accept) * allocation
-                    accept_prob = acceptance_probs[(c, pi_idx)]
-                    objective += profit * accept_prob * x_vars[(c, t, pi_idx)]
+                    objective += profit * x_vars[(c, t, pi_idx)]
         
         prob += objective, "Total_expected_profit"
         
@@ -279,10 +276,7 @@ class LPMethod(BasePricingMethod):
             ) <= 1
             prob += constraint, f"Offer_once_{c}"
         
-        # (2) Matching allocation (customer matched to one taxi if offered price)
-        # CRITICAL FIX: Don't multiply by acceptance_prob here!
-        # The acceptance uncertainty is handled in objective via expected value
-        # Here we just say: IF we offer price π, match to one taxi
+        # (2) Matching only after acceptance (Gupta-Nagarajan constraint)
         for c in range(n_requesters):
             for pi_idx in range(len(price_grids[c])):
                 taxi_sum = pulp.lpSum(
@@ -290,7 +284,7 @@ class LPMethod(BasePricingMethod):
                     for t in range(n_taxis)
                 )
                 prob += (
-                    taxi_sum <= y_vars[(c, pi_idx)],  # Removed acceptance_prob multiplication!
+                    taxi_sum <= acceptance_probs[(c, pi_idx)] * y_vars[(c, pi_idx)],
                     f"Link_{c}_{pi_idx}"
                 )
         
