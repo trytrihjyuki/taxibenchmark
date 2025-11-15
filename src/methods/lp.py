@@ -109,6 +109,22 @@ class LPMethod(BasePricingMethod):
         self.logger.info(f"{acceptance_function} LP solver optimal: ${opt_value:.2f}")
         self.logger.info(f"{acceptance_function} Manual objective calc: ${manual_obj:.2f}")
         
+        # DEBUG: Show LP allocation pattern
+        if self.logger.level <= 10:  # DEBUG level
+            self.logger.debug(f"{acceptance_function} LP solution analysis:")
+            for c in range(min(5, n_requesters)):  # First 5 customers
+                for pi_idx in range(len(price_grids[c])):
+                    y_val = y_vars[(c, pi_idx)].varValue or 0
+                    if y_val > 0.01:
+                        self.logger.debug(f"  Customer {c}: y[π{pi_idx}]={y_val:.3f}")
+                        taxi_allocs = [(t, x_vars[(c, t, pi_idx)].varValue or 0) 
+                                      for t in range(n_taxis)]
+                        nonzero = [(t, x) for t, x in taxi_allocs if x > 0.01]
+                        if len(nonzero) > 1:
+                            self.logger.debug(f"    SPREAD across {len(nonzero)} taxis: {nonzero}")
+                        elif nonzero:
+                            self.logger.debug(f"    Allocated to taxi {nonzero[0][0]}: {nonzero[0][1]:.3f}")
+        
         if abs(manual_obj - opt_value) > 1.0:
             self.logger.error(f"{acceptance_function} MISMATCH: Manual=${manual_obj:.2f} vs Solver=${opt_value:.2f}")
             self.logger.error("BUG in LP objective calculation!")
