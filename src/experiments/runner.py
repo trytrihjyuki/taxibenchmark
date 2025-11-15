@@ -302,6 +302,49 @@ class ExperimentRunner:
             progress_pct = ((tw_idx + 1) / len(time_windows)) * 100
             self.logger.info(f"Progress: {progress_pct:.1f}% ({tw_idx+1}/{len(time_windows)} windows)")
             
+            # INTERMEDIATE STATISTICS: Show running averages and cumulative metrics
+            if not decisions_df.empty and (tw_idx + 1) % 10 == 0 or tw_idx + 1 == len(time_windows):
+                self.logger.info("")
+                self.logger.info("📊 INTERMEDIATE RESULTS (cumulative so far):")
+                
+                # Load all decisions collected so far
+                cumulative_decisions = []
+                for completed_tw in range(tw_idx + 1):
+                    tw_file = self.decisions_dir / f"time_window_{completed_tw:04d}.parquet"
+                    if tw_file.exists():
+                        try:
+                            cumulative_decisions.append(pd.read_parquet(tw_file))
+                        except:
+                            pass
+                
+                if cumulative_decisions:
+                    cum_df = pd.concat(cumulative_decisions, ignore_index=True)
+                    
+                    for method in cum_df['method'].unique():
+                        for acc_func in ['PL', 'Sigmoid']:
+                            method_data = cum_df[(cum_df['method'] == method) & 
+                                                (cum_df['acceptance_function'] == acc_func)]
+                            if method_data.empty:
+                                continue
+                            
+                            total_rev = method_data['profit'].sum()
+                            total_val = method_data['total_value'].sum()
+                            accept_rate = method_data['sampled_decision'].mean()
+                            match_rate = method_data['was_matched'].mean()
+                            
+                            self.logger.info(f"  {method}_{acc_func}: Revenue=${total_rev:,.0f}, "
+                                           f"TotalValue=${total_val:,.0f}, "
+                                           f"Accept={accept_rate:.1%}, Match={match_rate:.1%}")
+                            
+                            # Show LP optimality if available
+                            if method == 'LP' and 'opt_value' in method_data.columns:
+                                opt_total = method_data.groupby('time_window_idx')['opt_value'].first().sum()
+                                if opt_total > 0:
+                                    ratio = total_val / opt_total
+                                    self.logger.info(f"       → LP Optimal=${opt_total:,.0f}, "
+                                                   f"Optimality={ratio:.1%}")
+                self.logger.info("")
+            
             # Time window statistics
             if tw_results:
                 avg_requesters = np.mean([r.get('num_requesters', 0) for r in tw_results])
