@@ -98,16 +98,16 @@ class BasePricingMethod(ABC):
             
             # Handle both return types: just prices or (prices, opt_value)
             if isinstance(compute_result, tuple):
-                prices, opt_value = compute_result
+                prices, lp_optimal_value = compute_result
             else:
                 prices = compute_result
-                opt_value = None  # Method doesn't compute optimal value
+                lp_optimal_value = None  # Method doesn't compute optimal value
             
             price_time = time() - price_start
             
             self.logger.debug(f"{acceptance_function} price computation: {price_time:.3f}s")
-            if opt_value is not None:
-                self.logger.info(f"{acceptance_function} optimal objective value: ${opt_value:.2f}")
+            if lp_optimal_value is not None:
+                self.logger.info(f"{acceptance_function} LP solver optimal value: ${lp_optimal_value:.2f}")
             
             # Record computation time
             computation_time = time() - func_start
@@ -208,9 +208,9 @@ class BasePricingMethod(ABC):
                     'num_simulations': num_simulations
                 }
                 
-                # NEW: Store opt_value array for LP method (for aggregation later)
-                if opt_value is not None:
-                    func_results['opt_value'] = float(opt_value)
+                # NEW: Store LP solver's optimal value (not simulation result!)
+                if lp_optimal_value is not None:
+                    func_results['opt_value'] = float(lp_optimal_value)  # TRUE LP optimal from solver
                     func_results['revenues'] = revenues  # Store individual simulation revenues
                     # Note: Optimality metrics will be computed during aggregation
             else:
@@ -251,9 +251,9 @@ class BasePricingMethod(ABC):
                     'num_simulations': 1
                 }
                 
-                # NEW: Store opt_value for LP method (for aggregation later)
-                if opt_value is not None:
-                    func_results['opt_value'] = float(opt_value)
+                # NEW: Store LP solver's optimal value (for aggregation later)
+                if lp_optimal_value is not None:
+                    func_results['opt_value'] = float(lp_optimal_value)  # TRUE LP optimal from solver
                     func_results['revenues'] = [realized_value]  # Single simulation revenue
                     # Note: Optimality metrics will be computed during aggregation
             
