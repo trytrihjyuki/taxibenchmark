@@ -900,6 +900,9 @@ class ExperimentRunner:
                 acceptance_probs = func_results.get('acceptance_probs', [])
                 matching_results = func_results.get('matching_results', [])
                 
+                # Get edge weights from result (needed for total value calculation)
+                edge_weights = result.get('edge_weights', None)
+                
                 # Simulate actual decisions (sampling) for each requester
                 np.random.seed(42 + tw_idx)  # Deterministic but varied by time window
                 
@@ -910,16 +913,26 @@ class ExperimentRunner:
                     # Sample decision based on acceptance probability
                     sampled_decision = 1 if np.random.random() < accept_prob else 0
                     
-                    # Calculate profit - revenue if matched, 0 if not
-                    # In a real scenario, this would depend on actual matching results
-                    profit = price * sampled_decision if sampled_decision else 0
-                    
                     # Check if this requester was actually matched in the optimization
                     was_matched = 0
+                    matched_taxi_idx = -1
                     if matching_results and i < len(matching_results):
-                        was_matched = 1 if matching_results[i] >= 0 else 0
+                        matched_taxi_idx = matching_results[i]
+                        was_matched = 1 if matched_taxi_idx >= 0 else 0
                     
-                    # NEW: Store optimal value for LP method only (gap/ratio computed during analysis)
+                    # Calculate edge weight for this match (if matched)
+                    edge_weight = 0.0
+                    if was_matched and edge_weights is not None and matched_taxi_idx >= 0:
+                        if i < len(edge_weights) and matched_taxi_idx < len(edge_weights[i]):
+                            edge_weight = edge_weights[i][matched_taxi_idx]
+                    
+                    # Calculate metrics:
+                    # - profit: revenue only (what customer pays)
+                    # - total_value: revenue + edge_weight (what LP optimizes)
+                    profit = price * sampled_decision if sampled_decision else 0
+                    total_value = (price + edge_weight) if was_matched else 0
+                    
+                    # Store optimal value for LP method only
                     opt_value = func_results.get('opt_value', None)
                     
                     decision = {
@@ -931,12 +944,17 @@ class ExperimentRunner:
                         'requester_id': i,
                         'price': price,
                         'acceptance_prob': accept_prob,
-                        'sampled_decision': sampled_decision,  # New: actual sampled acceptance
-                        'was_matched': was_matched,           # New: whether actually matched in optimization
-                        'profit': profit,                     # New: profit from this decision
-                        'compute_time': computation_time,     # New: computation time for this method
-                        'opt_value': opt_value,               # New: LP optimal value (None for other methods)
-                        # Note: optimality_gap and optimality_ratio will be computed during analysis
+                        'sampled_decision': sampled_decision,  # Actual sampled acceptance
+                        'was_matched': was_matched,           # Whether actually matched in optimization
+                        'profit': profit,                     # Revenue only (what customer pays)
+                        'edge_weight': edge_weight,           # Edge weight for this match (cost/benefit)
+                        'total_value': total_value,           # Revenue + edge_weight (what LP optimizes)
+                        'compute_time': computation_time,     # Computation time for this method
+                        'opt_value': opt_value,               # LP optimal value (None for other methods)
+                        # Note: For apple-to-apple comparison:
+                        # - Compare 'profit' across methods for revenue comparison
+                        # - Compare 'total_value' across methods for total value comparison
+                        # - Compare 'total_value' to 'opt_value' for LP optimality analysis
                     }
                     decisions.append(decision)
         

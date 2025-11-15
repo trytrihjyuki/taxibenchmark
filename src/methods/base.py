@@ -81,6 +81,7 @@ class BasePricingMethod(ABC):
             'method': self.get_method_name(),
             'num_requesters': scenario_data.get('num_requesters', 0),
             'num_taxis': scenario_data.get('num_taxis', 0),
+            'edge_weights': scenario_data.get('edge_weights', []),  # Include for total value calculation
         }
         
         # Get valuations
