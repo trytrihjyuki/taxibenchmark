@@ -73,7 +73,7 @@ class LPMethod(BasePricingMethod):
         )
         
         # Build and solve the LP
-        prob, x_vars, y_vars = self._build_lp(
+        prob, x_vars, y_vars, p_vars = self._build_lp(
             n_requesters, n_taxis, edge_weights,
             price_grids, acceptance_probs
         )
@@ -244,7 +244,7 @@ class LPMethod(BasePricingMethod):
         edge_weights: np.ndarray,
         price_grids: Dict[int, np.ndarray],
         acceptance_probs: Dict[Tuple[int, int], float]
-    ) -> Tuple[pulp.LpProblem, Dict, Dict]:
+    ) -> Tuple[pulp.LpProblem, Dict, Dict, Dict]:
         """
         Build Gupta-Nagarajan LP (ADAPTED from working Hikima code).
         
@@ -328,7 +328,7 @@ class LPMethod(BasePricingMethod):
                 f"Taxi_cap_{t}"
             )
         
-        return prob, x_vars, y_vars
+        return prob, x_vars, y_vars, p_vars
     
     def _extract_prices_from_solution(
         self,
