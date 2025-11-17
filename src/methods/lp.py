@@ -97,33 +97,52 @@ class LPMethod(BasePricingMethod):
         
         # CRITICAL DEBUG: Manual verification of objective
         manual_obj = 0.0
+        # Part 1: price * x
+        for c in range(n_requesters):
+            for pi_idx in range(len(price_grids[c])):
+                x_val = x_vars[(c, pi_idx)].varValue or 0
+                if x_val > 1e-6:
+                    price = price_grids[c][pi_idx]
+                    manual_obj += price * x_val
+        
+        # Part 2: edge_weight * p
         for c in range(n_requesters):
             for t in range(n_taxis):
-                for pi_idx in range(len(price_grids[c])):
-                    x_val = x_vars[(c, t, pi_idx)].varValue or 0
-                    if x_val > 1e-6:
-                        price = price_grids[c][pi_idx]
-                        profit = price + edge_weights[c, t]
-                        manual_obj += profit * x_val
+                p_val = p_vars[(c, t)].varValue or 0
+                if p_val > 1e-6:
+                    manual_obj += edge_weights[c, t] * p_val
         
         self.logger.info(f"{acceptance_function} LP solver optimal: ${opt_value:.2f}")
         self.logger.info(f"{acceptance_function} Manual objective calc: ${manual_obj:.2f}")
         
-        # DEBUG: Show LP allocation pattern
+        # DEBUG: Show LP allocation pattern with new structure
         if self.logger.level <= 10:  # DEBUG level
-            self.logger.debug(f"{acceptance_function} LP solution analysis:")
-            for c in range(min(5, n_requesters)):  # First 5 customers
+            self.logger.debug(f"{acceptance_function} LP solution (new structure with p_vars):")
+            
+            for c in range(min(5, n_requesters)):
+                # Check which price offered
                 for pi_idx in range(len(price_grids[c])):
                     y_val = y_vars[(c, pi_idx)].varValue or 0
                     if y_val > 0.01:
-                        self.logger.debug(f"  Customer {c}: y[π{pi_idx}]={y_val:.3f}")
-                        taxi_allocs = [(t, x_vars[(c, t, pi_idx)].varValue or 0) 
+                        x_val = x_vars[(c, pi_idx)].varValue or 0
+                        self.logger.debug(f"  Customer {c}: price=${price_grids[c][pi_idx]:.2f}, y={y_val:.3f}, x={x_val:.3f}")
+                        
+                        # Check p_vars (edge allocation)
+                        taxi_allocs = [(t, p_vars[(c, t)].varValue or 0, edge_weights[c, t]) 
                                       for t in range(n_taxis)]
-                        nonzero = [(t, x) for t, x in taxi_allocs if x > 0.01]
+                        nonzero = [(t, p, ew) for t, p, ew in taxi_allocs if p > 0.01]
+                        
                         if len(nonzero) > 1:
-                            self.logger.debug(f"    SPREAD across {len(nonzero)} taxis: {nonzero}")
-                        elif nonzero:
-                            self.logger.debug(f"    Allocated to taxi {nonzero[0][0]}: {nonzero[0][1]:.3f}")
+                            best_t = max(range(n_taxis), key=lambda t: edge_weights[c, t])
+                            self.logger.debug(f"    SPREAD p[{c},t] across {len(nonzero)} taxis:")
+                            for t, p, ew in nonzero:
+                                self.logger.debug(f"      t={t}: p={p:.3f}, ew={ew:.2f}")
+                            self.logger.debug(f"    (Best would be t={best_t}, ew={edge_weights[c,best_t]:.2f})")
+                        elif len(nonzero) == 1:
+                            t, p, ew = nonzero[0]
+                            best_t = max(range(n_taxis), key=lambda t: edge_weights[c, t])
+                            status = "✓" if t == best_t else f"(best={best_t})"
+                            self.logger.debug(f"    Concentrated: p[{c},{t}]={p:.3f}, ew={ew:.2f} {status}")
         
         if abs(manual_obj - opt_value) > 1.0:
             self.logger.error(f"{acceptance_function} MISMATCH: Manual=${manual_obj:.2f} vs Solver=${opt_value:.2f}")
@@ -227,75 +246,87 @@ class LPMethod(BasePricingMethod):
         acceptance_probs: Dict[Tuple[int, int], float]
     ) -> Tuple[pulp.LpProblem, Dict, Dict]:
         """
-        Build the Gupta-Nagarajan LP formulation.
+        Build Gupta-Nagarajan LP (ADAPTED from working Hikima code).
+        
+        Key insight: Separate acceptance (x,y) from edge allocation (p).
         
         Returns:
             Tuple of (problem, x_variables, y_variables)
         """
-        # Create LP problem
         prob = pulp.LpProblem("RideHailing_GN_LP", pulp.LpMaximize)
         
-        # Create variables
-        # y[c, pi_idx]: probability we offer price pi to requester c
+        # THREE variable types (like working Hikima adaptation):
+        # x[c, pi_idx]: prob customer c accepts at price level pi_idx
+        # y[c, pi_idx]: prob we offer price level pi_idx to customer c
+        # p[c, t]: prob customer c is matched to taxi t
+        
+        x_vars = {}
+        for c in range(n_requesters):
+            for pi_idx in range(len(price_grids[c])):
+                x_vars[(c, pi_idx)] = pulp.LpVariable(
+                    f"x_{c}_{pi_idx}", lowBound=0
+                )
+        
         y_vars = {}
         for c in range(n_requesters):
             for pi_idx in range(len(price_grids[c])):
                 y_vars[(c, pi_idx)] = pulp.LpVariable(
-                    f"y_{c}_{pi_idx}", lowBound=0, upBound=1
+                    f"y_{c}_{pi_idx}", lowBound=0
                 )
         
-        # x[c, t, pi_idx]: probability requester c accepts price pi and is matched to taxi t
-        x_vars = {}
+        p_vars = {}
         for c in range(n_requesters):
             for t in range(n_taxis):
-                for pi_idx in range(len(price_grids[c])):
-                    x_vars[(c, t, pi_idx)] = pulp.LpVariable(
-                        f"x_{c}_{t}_{pi_idx}", lowBound=0, upBound=1
-                    )
+                p_vars[(c, t)] = pulp.LpVariable(
+                    f"p_{c}_{t}", lowBound=0
+                )
         
-        # Objective: maximize expected profit
-        # NOTE: edge_weights are ALREADY NEGATIVE (costs), so we ADD them directly
-        objective = 0
-        for c in range(n_requesters):
-            for t in range(n_taxis):
-                for pi_idx in range(len(price_grids[c])):
-                    price = price_grids[c][pi_idx]
-                    # edge_weights[c,t] is already negative (cost)
-                    profit = price + edge_weights[c, t]
-                    objective += profit * x_vars[(c, t, pi_idx)]
+        # Objective: price * acceptance + edge_weight * allocation
+        # Matches: Sum price[i,k] * x[i,k] + Sum W[i,j] * p[i,j]
+        objective = pulp.lpSum(
+            price_grids[c][pi_idx] * x_vars[(c, pi_idx)]
+            for c in range(n_requesters)
+            for pi_idx in range(len(price_grids[c]))
+        ) + pulp.lpSum(
+            edge_weights[c, t] * p_vars[(c, t)]
+            for c in range(n_requesters)
+            for t in range(n_taxis)
+        )
         
         prob += objective, "Total_expected_profit"
         
         # Constraints
         
-        # (1) Probe at most one price per requester
-        for c in range(n_requesters):
-            constraint = pulp.lpSum(
-                y_vars[(c, pi_idx)] 
-                for pi_idx in range(len(price_grids[c]))
-            ) <= 1
-            prob += constraint, f"Offer_once_{c}"
-        
-        # (2) Matching only after acceptance (Gupta-Nagarajan constraint)
+        # (1) x[c,k] ≤ acceptance_prob[c,k] * y[c,k]
         for c in range(n_requesters):
             for pi_idx in range(len(price_grids[c])):
-                taxi_sum = pulp.lpSum(
-                    x_vars[(c, t, pi_idx)]
-                    for t in range(n_taxis)
-                )
                 prob += (
-                    taxi_sum <= acceptance_probs[(c, pi_idx)] * y_vars[(c, pi_idx)],
-                    f"Link_{c}_{pi_idx}"
+                    x_vars[(c, pi_idx)] <= acceptance_probs[(c, pi_idx)] * y_vars[(c, pi_idx)],
+                    f"Accept_{c}_{pi_idx}"
                 )
         
-        # (3) Taxi capacity: one requester per taxi
+        # (2) Offer at most one price per customer
+        for c in range(n_requesters):
+            prob += (
+                pulp.lpSum(y_vars[(c, pi_idx)] for pi_idx in range(len(price_grids[c]))) <= 1,
+                f"Offer_once_{c}"
+            )
+        
+        # (3) FLOW BALANCE: Sum_t p[c,t] = Sum_k x[c,k]
+        # This is THE CRITICAL CONSTRAINT that was missing!
+        for c in range(n_requesters):
+            prob += (
+                pulp.lpSum(p_vars[(c, t)] for t in range(n_taxis)) == 
+                pulp.lpSum(x_vars[(c, pi_idx)] for pi_idx in range(len(price_grids[c]))),
+                f"Flow_balance_{c}"
+            )
+        
+        # (4) Taxi capacity: each taxi serves at most one customer
         for t in range(n_taxis):
-            constraint = pulp.lpSum(
-                x_vars[(c, t, pi_idx)]
-                for c in range(n_requesters)
-                for pi_idx in range(len(price_grids[c]))
-            ) <= 1
-            prob += constraint, f"Taxi_cap_{t}"
+            prob += (
+                pulp.lpSum(p_vars[(c, t)] for c in range(n_requesters)) <= 1,
+                f"Taxi_cap_{t}"
+            )
         
         return prob, x_vars, y_vars
     
