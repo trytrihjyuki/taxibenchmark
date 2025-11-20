@@ -387,18 +387,35 @@ class ExperimentRunner:
             
             # Overall experiment statistics so far
             if len(all_results) > 0:
-                # Calculate cumulative statistics
-                all_pl_revenues = []
-                all_sigmoid_revenues = []
+                # Calculate cumulative statistics PER METHOD PER ACCEPTANCE FUNCTION
+                from collections import defaultdict
+                method_stats = defaultdict(lambda: {
+                    'PL': {'revenues': [], 'opt_values': []},
+                    'Sigmoid': {'revenues': [], 'opt_values': []}
+                })
                 all_computation_times = []
                 total_requesters = 0
                 total_taxis = 0
                 
                 for result in all_results:
+                    method_name = result.get('method', 'Unknown')
+                    
+                    # Track PL statistics
                     if 'PL' in result:
-                        all_pl_revenues.append(result['PL'].get('avg_revenue', 0))
+                        pl_data = result['PL']
+                        method_stats[method_name]['PL']['revenues'].append(pl_data.get('avg_revenue', 0))
+                        # Track LP optimal value if available
+                        if 'opt_value' in pl_data:
+                            method_stats[method_name]['PL']['opt_values'].append(pl_data['opt_value'])
+                    
+                    # Track Sigmoid statistics
                     if 'Sigmoid' in result:
-                        all_sigmoid_revenues.append(result['Sigmoid'].get('avg_revenue', 0))
+                        sigmoid_data = result['Sigmoid']
+                        method_stats[method_name]['Sigmoid']['revenues'].append(sigmoid_data.get('avg_revenue', 0))
+                        # Track LP optimal value if available
+                        if 'opt_value' in sigmoid_data:
+                            method_stats[method_name]['Sigmoid']['opt_values'].append(sigmoid_data['opt_value'])
+                    
                     if 'computation_time' in result:
                         all_computation_times.append(result['computation_time'])
                     
@@ -406,31 +423,59 @@ class ExperimentRunner:
                     total_taxis += result.get('num_taxis', 0)
                 
                 # Log cumulative statistics
-                self.logger.info(f"CUMULATIVE STATS (through window {tw_idx+1}):")
-                self.logger.info(f"  Total Scenarios: {len(all_results)}")
-                self.logger.info(f"  Total Requesters: {total_requesters}")
-                self.logger.info(f"  Total Taxis: {total_taxis}")
+                self.logger.info(f"╔{'═' * 78}╗")
+                self.logger.info(f"║ CUMULATIVE STATS (through window {tw_idx+1:3d}/{len(time_windows)}){'': <42}║")
+                self.logger.info(f"╠{'═' * 78}╣")
+                self.logger.info(f"║ Total Scenarios: {len(all_results):5d}  |  Requesters: {total_requesters:6d}  |  Taxis: {total_taxis:6d}{'': <10}║")
+                self.logger.info(f"╠{'═' * 78}╣")
                 
-                if all_pl_revenues:
-                    self.logger.info(f"  Cumulative PL Revenue: ${np.sum(all_pl_revenues):.2f} (avg: ${np.mean(all_pl_revenues):.2f})")
-                if all_sigmoid_revenues:
-                    self.logger.info(f"  Cumulative Sigmoid Revenue: ${np.sum(all_sigmoid_revenues):.2f} (avg: ${np.mean(all_sigmoid_revenues):.2f})")
+                # Print per method per acceptance function
+                for acc_func in ['PL', 'Sigmoid']:
+                    self.logger.info(f"║ {acc_func + ' Acceptance':16}{'': <61}║")
+                    self.logger.info(f"║ {'-' * 76} ║")
+                    
+                    for method_name in sorted(method_stats.keys()):
+                        revenues = method_stats[method_name][acc_func]['revenues']
+                        opt_values = method_stats[method_name][acc_func]['opt_values']
+                        
+                        if revenues:
+                            avg_rev = np.mean(revenues)
+                            std_rev = np.std(revenues)
+                            
+                            # Check if this is LP method with opt_values
+                            if opt_values:
+                                avg_opt = np.mean(opt_values)
+                                gap = avg_opt - avg_rev
+                                gap_pct = (gap / avg_opt * 100) if avg_opt > 0 else 0
+                                self.logger.info(
+                                    f"║   {method_name:12s}: ${avg_rev:8.2f} ± ${std_rev:6.2f}  "
+                                    f"(LP opt: ${avg_opt:8.2f}, gap: {gap_pct:5.1f}%){'': <3}║"
+                                )
+                            else:
+                                self.logger.info(
+                                    f"║   {method_name:12s}: ${avg_rev:8.2f} ± ${std_rev:6.2f}{'': <33}║"
+                                )
+                    
+                    if acc_func == 'PL':  # Add separator between PL and Sigmoid
+                        self.logger.info(f"║ {' ' * 76} ║")
                 
+                self.logger.info(f"╠{'═' * 78}╣")
+                
+                # Timing statistics
                 if all_computation_times:
                     total_simulations_so_far = len(all_results) * self.config.num_iter
                     cumulative_time = np.sum(all_computation_times)
                     avg_sim_time = cumulative_time / total_simulations_so_far if total_simulations_so_far > 0 else 0
                     
-                    self.logger.info(f"  Total Simulations So Far: {total_simulations_so_far}")
-                    self.logger.info(f"  Cumulative Computation Time: {cumulative_time:.2f}s")
-                    self.logger.info(f"  Average Time per Simulation: {avg_sim_time*1000:.2f}ms")
+                    self.logger.info(f"║ Simulations: {total_simulations_so_far:6d}  |  Cumulative Time: {cumulative_time:7.1f}s  |  Avg: {avg_sim_time*1000:6.2f}ms{'': <7}║")
                 
                 # Estimated time remaining
                 if tw_idx + 1 < len(time_windows) and tw_total_time > 0:
                     remaining_windows = len(time_windows) - (tw_idx + 1)
                     estimated_remaining = remaining_windows * tw_total_time
-                    self.logger.info(f"  Estimated Time Remaining: {estimated_remaining:.1f}s ({estimated_remaining/60:.1f} min)")
+                    self.logger.info(f"║ Estimated Remaining: {estimated_remaining:7.1f}s  ({estimated_remaining/60:5.1f} min){'': <31}║")
                 
+                self.logger.info(f"╚{'═' * 78}╝")
                 self.logger.info("")
         
         # Create enhanced summary using new aggregator

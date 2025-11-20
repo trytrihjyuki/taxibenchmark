@@ -64,10 +64,8 @@ class ExperimentConfig:
     maps_matching_radius: float = 2.0  # km
     
     # LP parameters
-    lp_price_grid_size: int = 50  # Number of price points in discretization (was 80, reduced for performance)
-    lp_solver: str = 'highs'  # LP solver: 'cbc' (default), 'highs' (faster if available), 'gurobi', 'cplex'
-    lp_price_min_mult: float = 0.5  # Minimum price = valuation * this multiplier
-    lp_price_max_mult: float = 2.0  # Maximum price = valuation * this multiplier
+    lp_price_grid_size: int = 5  # Number of discrete price levels (linear spacing from 0 to 2×trip_amount)
+    lp_solver: str = 'cbc'  # LP solver: 'cbc' (default), 'highs' (faster if available), 'gurobi', 'cplex'
     
     # Data filtering
     min_trip_distance: float = 0.001  # km

@@ -309,12 +309,13 @@ class BasePricingMethod(ABC):
             
         elif acceptance_function == 'Sigmoid':
             # Sigmoid acceptance function - exact match to Hikima implementation
-            # From experiment_Sigmoid.py line 739 and 782-783:
+            # From experiment_Sigmoid.py line 542-544 and 736-738:
             # P(accept) = 1 - (1 / (1 + exp((-price + beta*valuation) / (gamma*valuation))))
+            # CRITICAL FIX: Remove abs() - valuations are always positive!
             beta = self.sigmoid_beta
             gamma = self.sigmoid_gamma
             
-            exponent = (-prices + beta * valuations) / (gamma * np.abs(valuations))
+            exponent = (-prices + beta * valuations) / (gamma * valuations)
             probs = 1.0 - (1.0 / (1.0 + np.exp(exponent)))
             
         else:

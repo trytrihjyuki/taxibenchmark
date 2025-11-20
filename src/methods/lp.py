@@ -16,9 +16,16 @@ class LPMethod(BasePricingMethod):
     Linear Programming pricing method using Gupta-Nagarajan approach.
     
     This method linearizes the Myerson revenue optimization problem by:
-    1. Discretizing the price space into a finite grid
-    2. Using probing variables y_c,π for each rider-price pair
-    3. Using allocation variables x_c,t,π for rider-taxi-price triples
+    1. Discretizing the price space into linearly-spaced levels (0 to 2×trip_amount)
+    2. Using probing variables y_c,π for each rider-price pair  
+    3. Using allocation variables x_c,π and p_c,t for matching
+    
+    Price Grid Design:
+    - Prices are linearly spaced from 0 to 2×trip_amount
+    - Grid size controls granularity (default: 5 levels)
+    - Linear spacing ensures uniform coverage of the price range
+    - Smaller grid → faster solve, coarser discretization
+    - Larger grid → tighter LP bound, more variables
     """
     
     def __init__(self, config: Dict[str, Any]):
@@ -26,10 +33,9 @@ class LPMethod(BasePricingMethod):
         super().__init__(config)
         
         # LP-specific parameters
-        # Trade-off: Slightly less granular pricing, but still adequate
-        self.price_grid_size = config.get('lp_price_grid_size', 50)
-        self.price_min_multiplier = config.get('lp_price_min_mult', 0.5)
-        self.price_max_multiplier = config.get('lp_price_max_mult', 2.0)
+        # Number of discrete price levels (linearly spaced from 0 to 2×trip_amount)
+        self.price_grid_size = config.get('lp_price_grid_size', 5)
+        self.logger.info(f"Using {self.price_grid_size} linearly-spaced price levels (0 to 2×trip_amount)")
         
         # Solver selection (default to CBC for compatibility, can override with 'highs', 'gurobi', 'cplex')
         self.solver_name = config.get('lp_solver', 'cbc')  # 'cbc', 'highs', 'gurobi', 'cplex'
@@ -94,6 +100,15 @@ class LPMethod(BasePricingMethod):
         prices = self._extract_prices_from_solution(
             y_vars, price_grids, n_requesters
         )
+        
+        # VALIDATION: Verify price grids
+        if self.logger.level <= 10:  # DEBUG level
+            self.logger.debug(f"{acceptance_function} Price grid verification:")
+            self.logger.debug(f"  Grid size: {self.price_grid_size} (linear spacing 0 to 2×trip_amount)")
+            for i in range(min(3, n_requesters)):
+                self.logger.debug(f"  Customer {i}: trip_amount=${trip_amounts[i]:.2f}, "
+                                f"grid={[f'${p:.2f}' for p in price_grids[i]]}")
+                self.logger.debug(f"    Selected price: ${prices[i]:.2f}")
         
         # CRITICAL DEBUG: Manual verification of objective
         manual_obj = 0.0
@@ -180,8 +195,11 @@ class LPMethod(BasePricingMethod):
         """
         Generate discretized price grids for each requester.
         
+        Creates linearly-spaced prices from 0 to 2×trip_amount.
+        The granularity is controlled by lp_price_grid_size.
+        
         Args:
-            trip_amounts: Array of trip valuations
+            trip_amounts: Array of trip valuations (historical total_amount)
             
         Returns:
             Dictionary mapping requester index to price grid
@@ -189,16 +207,9 @@ class LPMethod(BasePricingMethod):
         price_grids = {}
         
         for i, amount in enumerate(trip_amounts):
-            # Generate price grid based on trip amount
-            min_price = amount * self.price_min_multiplier
-            max_price = amount * self.price_max_multiplier
-            
-            # Create log-spaced grid for better coverage
-            grid = np.logspace(
-                np.log10(max(min_price, 0.1)),
-                np.log10(max_price),
-                self.price_grid_size
-            )
+            # Linear spacing from 0 to 2×trip_amount
+            # This covers a reasonable range: [0%, 200%] of valuation
+            grid = np.linspace(0, 2.0 * amount, self.price_grid_size)
             price_grids[i] = grid
         
         return price_grids
@@ -225,10 +236,13 @@ class LPMethod(BasePricingMethod):
             
             if acceptance_function == 'PL':
                 # Vectorized piecewise linear: P(accept) = max(0, min(1, -2/v * p + 3))
+                # Reference: experiment_PL.py line 642
                 probs = np.clip(-2.0 / amount * prices + 3.0, 0.0, 1.0)
             else:  # Sigmoid
                 # Vectorized sigmoid acceptance
-                exponents = (-prices + self.sigmoid_beta * amount) / (self.sigmoid_gamma * abs(amount))
+                # Reference: experiment_Sigmoid.py lines 542-544
+                # CRITICAL FIX: Remove abs() - amounts are always positive!
+                exponents = (-prices + self.sigmoid_beta * amount) / (self.sigmoid_gamma * amount)
                 probs = 1.0 - (1.0 / (1.0 + np.exp(exponents)))
             
             # Store in dictionary format expected by LP builder
