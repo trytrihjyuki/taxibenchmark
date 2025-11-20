@@ -1011,42 +1011,28 @@ class ExperimentRunner:
                 
                 func_results = result[accept_func]
                 acceptance_probs = func_results.get('acceptance_probs', [])
-                matching_results = func_results.get('matching_results', [])
                 
-                # Get edge weights from result (needed for total value calculation)
-                edge_weights = result.get('edge_weights', None)
+                # NEW: Use averaged statistics across all simulations (not just 99th)
+                requester_matching_probs = func_results.get('requester_matching_probs', [])
+                requester_avg_values = func_results.get('requester_avg_values', [])
+                requester_acceptance_probs_realized = func_results.get('requester_acceptance_probs_realized', [])
                 
-                # Simulate actual decisions (sampling) for each requester
-                np.random.seed(42 + tw_idx)  # Deterministic but varied by time window
+                # Store optimal value for LP method only
+                opt_value = func_results.get('opt_value', None)
                 
                 for i in range(n_requesters):
                     price = prices[i] if i < len(prices) else 0
                     accept_prob = acceptance_probs[i] if i < len(acceptance_probs) else 0
                     
-                    # Sample decision based on acceptance probability
-                    sampled_decision = 1 if np.random.random() < accept_prob else 0
+                    # NEW: Use averaged statistics from simulations
+                    matching_prob = requester_matching_probs[i] if i < len(requester_matching_probs) else 0.0
+                    avg_value = requester_avg_values[i] if i < len(requester_avg_values) else 0.0
+                    acceptance_prob_realized = requester_acceptance_probs_realized[i] if i < len(requester_acceptance_probs_realized) else 0.0
                     
-                    # Check if this requester was actually matched in the optimization
-                    was_matched = 0
-                    matched_taxi_idx = -1
-                    if matching_results and i < len(matching_results):
-                        matched_taxi_idx = matching_results[i]
-                        was_matched = 1 if matched_taxi_idx >= 0 else 0
-                    
-                    # Calculate edge weight for this match (if matched)
-                    edge_weight = 0.0
-                    if was_matched and edge_weights is not None and matched_taxi_idx >= 0:
-                        if i < len(edge_weights) and matched_taxi_idx < len(edge_weights[i]):
-                            edge_weight = edge_weights[i][matched_taxi_idx]
-                    
-                    # Calculate metrics:
-                    # - profit: revenue only (what customer pays)
-                    # - total_value: revenue + edge_weight (what LP optimizes)
-                    profit = price * sampled_decision if sampled_decision else 0
-                    total_value = (price + edge_weight) if was_matched else 0
-                    
-                    # Store optimal value for LP method only
-                    opt_value = func_results.get('opt_value', None)
+                    # Expected profit and total value (probability-weighted averages)
+                    # This is what we expect on average across all simulations
+                    expected_profit = price * acceptance_prob_realized
+                    expected_total_value = avg_value * matching_prob
                     
                     decision = {
                         'time_window_idx': tw_idx,
@@ -1056,18 +1042,18 @@ class ExperimentRunner:
                         'acceptance_function': accept_func,
                         'requester_id': i,
                         'price': price,
-                        'acceptance_prob': accept_prob,
-                        'sampled_decision': sampled_decision,  # Actual sampled acceptance
-                        'was_matched': was_matched,           # Whether actually matched in optimization
-                        'profit': profit,                     # Revenue only (what customer pays)
-                        'edge_weight': edge_weight,           # Edge weight for this match (cost/benefit)
-                        'total_value': total_value,           # Revenue + edge_weight (what LP optimizes)
-                        'compute_time': computation_time,     # Computation time for this method
-                        'opt_value': opt_value,               # LP optimal value (None for other methods)
+                        'acceptance_prob': accept_prob,  # Theoretical acceptance probability
+                        'acceptance_prob_realized': acceptance_prob_realized,  # Actual avg acceptance rate from sims
+                        'matching_prob': matching_prob,  # Probability of being matched (0 to 1)
+                        'avg_value_when_matched': avg_value,  # Average (price + edge_weight) when matched
+                        'expected_profit': expected_profit,  # Expected revenue (price * acceptance_prob)
+                        'expected_total_value': expected_total_value,  # Expected total value (avg_value * matching_prob)
+                        'compute_time': computation_time,  # Computation time for this method
+                        'opt_value': opt_value,  # LP optimal value (None for other methods)
                         # Note: For apple-to-apple comparison:
-                        # - Compare 'profit' across methods for revenue comparison
-                        # - Compare 'total_value' across methods for total value comparison
-                        # - Compare 'total_value' to 'opt_value' for LP optimality analysis
+                        # - Sum 'expected_profit' across requesters = expected revenue
+                        # - Sum 'expected_total_value' across requesters = expected total value
+                        # - Compare 'expected_total_value' sum to 'opt_value' for LP optimality analysis
                     }
                     decisions.append(decision)
         
