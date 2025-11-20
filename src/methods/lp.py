@@ -34,7 +34,7 @@ class LPMethod(BasePricingMethod):
         
         # LP-specific parameters
         # Number of discrete price levels (linearly spaced from 0 to 2×trip_amount)
-        self.price_grid_size = config.get('lp-price-grid-size', 5)
+        self.price_grid_size = config.get('lp_price_grid_size', 5)
         self.logger.info(f"Using {self.price_grid_size} linearly-spaced price levels (0 to 2×trip_amount)")
         
         # Solver selection (default to CBC for compatibility, can override with 'highs', 'gurobi', 'cplex')

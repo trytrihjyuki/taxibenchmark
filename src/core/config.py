@@ -181,6 +181,8 @@ class ExperimentConfig:
             'maps_s0_rate': self.maps_s0_rate,
             'maps_price_delta': self.maps_price_delta,
             'maps_matching_radius': self.maps_matching_radius,
+            'lp_price_grid_size': self.lp_price_grid_size,
+            'lp_solver': self.lp_solver,
             'experiment_id': self.get_experiment_id()
         }
     
