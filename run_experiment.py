@@ -136,7 +136,7 @@ def parse_arguments():
     parser.add_argument(
         '--lp-price-grid-size',
         type=int,
-        default=5,
+        default=70,
         help='Number of discrete price levels (linear spacing from 0 to 2×trip_amount, default: 5)'
     )
     
