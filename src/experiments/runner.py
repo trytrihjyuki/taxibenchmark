@@ -48,8 +48,25 @@ def run_single_scenario(args: Tuple[Dict, Dict, int]) -> Dict:
         n_req = scenario_data['num_requesters']
         n_tax = scenario_data['num_taxis']
         
+        # CRITICAL: Pre-generate SHARED random draws for ALL methods (like reference)
+        # This ensures all methods see the SAME acceptance realizations
+        import numpy as np
+        scenario_seed = config_dict.get('random_seed', 42)
+        # Add scenario-specific offset to ensure different scenarios get different but reproducible seeds
+        scenario_offset = hash(f"{scenario_data['scenario_id']}") % 1000000
+        np.random.seed(scenario_seed + scenario_offset)
+        
+        # Pre-generate random draws for all simulations (like reference experiment_PL.py line 777)
+        # Shape: (num_simulations, num_requesters)
+        if n_req > 0:
+            shared_random_draws = np.random.rand(num_simulations, n_req)
+            scenario_data['shared_random_draws'] = shared_random_draws
+            logger.debug(f"Pre-generated {num_simulations}×{n_req} shared random draws")
+        else:
+            scenario_data['shared_random_draws'] = None
+        
         start_time = datetime.now()
-        logger.info(f"Starting scenario for {borough} (N={n_req}, M={n_tax}, sims={num_simulations})")
+        logger.info(f"Starting scenario for {borough} (N={n_req}, M={n_tax}, sims={num_simulations}, seed={scenario_seed + scenario_offset})")
         
         # Create method factory with config
         factory_start = datetime.now()
@@ -59,7 +76,7 @@ def run_single_scenario(args: Tuple[Dict, Dict, int]) -> Dict:
         
         logger.debug(f"[{method_name}] Method creation took {factory_time:.3f}s")
         
-        # Run method (returns results for both PL and Sigmoid)
+        # Run method with SHARED random draws (returns results for both PL and Sigmoid)
         execution_start = datetime.now()
         results = method.execute(scenario_data, num_simulations)
         execution_time = (datetime.now() - execution_start).total_seconds()
@@ -80,6 +97,7 @@ def run_single_scenario(args: Tuple[Dict, Dict, int]) -> Dict:
         results['computation_time'] = execution_time
         results['factory_time'] = factory_time
         results['total_time'] = total_time
+        results['seed_used'] = scenario_seed + scenario_offset
         
         return results
         
@@ -107,7 +125,8 @@ class ExperimentRunner:
         self.logger = get_logger("experiment.runner")
         
         # Set random seeds for reproducibility (like Hikima's deterministic approach)
-        np.random.seed(42)
+        np.random.seed(config.random_seed)
+        self.logger.info(f"Random seed set to: {config.random_seed}")
         
         # Store trip data for scenario creation (will be populated in run method)
         self.all_trip_data = None

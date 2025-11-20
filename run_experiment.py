@@ -148,6 +148,13 @@ def parse_arguments():
         help='LP solver to use (default: cbc, highs is faster if available)'
     )
     
+    parser.add_argument(
+        '--seed',
+        type=int,
+        default=42,
+        help='Random seed for reproducibility (default: 42, like reference code)'
+    )
+    
     return parser.parse_args()
 
 
@@ -218,7 +225,8 @@ def main():
             num_iter=args.num_iter,
             num_workers=args.num_workers,
             lp_price_grid_size=args.lp_price_grid_size,
-            lp_solver=args.lp_solver
+            lp_solver=args.lp_solver,
+            random_seed=args.seed
         )
         
         # Log configuration

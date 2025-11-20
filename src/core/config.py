@@ -31,6 +31,7 @@ class ExperimentConfig:
     
     # Monte Carlo parameters
     num_iter: int = 100  # Number of Monte Carlo iterations per time window
+    random_seed: int = 42  # Random seed for reproducibility (like reference code)
     
     # Parallel processing
     num_workers: int = 4
@@ -167,6 +168,7 @@ class ExperimentConfig:
             'time_unit': self.time_unit,
             'time_window_size': self.time_window_size,
             'num_iter': self.num_iter,
+            'random_seed': self.random_seed,
             'num_workers': self.num_workers,
             's3_base': self.s3_base,
             's3_results_bucket': self.s3_results_bucket,

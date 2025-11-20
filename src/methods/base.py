@@ -123,6 +123,12 @@ class BasePricingMethod(ABC):
             
             # Run Monte Carlo simulations using Hikima's approach with optional parallelization
             sim_start = time()
+            
+            # CRITICAL: Check if we have shared random draws (for fair comparison across methods)
+            shared_random_draws = scenario_data.get('shared_random_draws', None)
+            if shared_random_draws is not None:
+                self.logger.debug(f"{acceptance_function} using SHARED random draws (like reference code)")
+            
             if num_simulations > 1:
                 # Determine if we should parallelize simulations
                 num_workers = scenario_data.get('num_workers', 1)
@@ -144,10 +150,17 @@ class BasePricingMethod(ABC):
                     acceptance_rates = []
                     
                     for sim_idx in range(num_simulations):
-                        # Simulate acceptance decisions exactly like Hikima
+                        # Simulate acceptance decisions exactly like Hikima (experiment_PL.py line 777)
+                        # CRITICAL: Use SHARED random draws if available
                         accepted = np.zeros(len(acceptance_probs))
                         for i in range(len(acceptance_probs)):
-                            tmp = np.random.rand()
+                            if shared_random_draws is not None and sim_idx < len(shared_random_draws):
+                                # Use pre-generated shared random number (same for ALL methods!)
+                                tmp = shared_random_draws[sim_idx, i]
+                            else:
+                                # Fallback to generating new random number
+                                tmp = np.random.rand()
+                            
                             if tmp < acceptance_probs[i]:
                                 accepted[i] = 1
                         
@@ -174,8 +187,15 @@ class BasePricingMethod(ABC):
                 # Aggregate results - use the last simulation's matching for decision tracking
                 # Get matching results from the last simulation
                 final_accepted = np.zeros(len(acceptance_probs))
+                last_sim_idx = num_simulations - 1
                 for i in range(len(acceptance_probs)):
-                    tmp = np.random.rand()
+                    if shared_random_draws is not None and last_sim_idx < len(shared_random_draws):
+                        # Use pre-generated shared random number from last simulation
+                        tmp = shared_random_draws[last_sim_idx, i]
+                    else:
+                        # Fallback to generating new random number
+                        tmp = np.random.rand()
+                    
                     if tmp < acceptance_probs[i]:
                         final_accepted[i] = 1
                 
@@ -217,7 +237,13 @@ class BasePricingMethod(ABC):
                 # Single run using Hikima's approach
                 accepted = np.zeros(len(acceptance_probs))
                 for i in range(len(acceptance_probs)):
-                    tmp = np.random.rand()
+                    if shared_random_draws is not None and len(shared_random_draws) > 0:
+                        # Use pre-generated shared random number
+                        tmp = shared_random_draws[0, i]
+                    else:
+                        # Fallback to generating new random number
+                        tmp = np.random.rand()
+                    
                     if tmp < acceptance_probs[i]:
                         accepted[i] = 1
                 
@@ -503,12 +529,14 @@ class BasePricingMethod(ABC):
                 'worker_id': worker_id,
                 'num_sims': worker_sims,
                 'seed_start': worker_seed_start,
+                'sim_offset': current_sim,  # Which simulation index this worker starts from
                 'prices': prices.tolist(),
                 'acceptance_probs': acceptance_probs.tolist(),
                 'edge_weights': scenario_data['edge_weights'].tolist(),
                 'num_requesters': scenario_data['num_requesters'],
                 'num_taxis': scenario_data['num_taxis'],
-                'acceptance_function': acceptance_function
+                'acceptance_function': acceptance_function,
+                'shared_random_draws': scenario_data.get('shared_random_draws', None).tolist() if scenario_data.get('shared_random_draws', None) is not None else None
             }
             worker_tasks.append(worker_task)
             current_sim += worker_sims
@@ -591,11 +619,20 @@ class BasePricingMethod(ABC):
         matching_rates = []
         acceptance_rates = []
         
+        # Check for shared random draws
+        shared_random_draws = scenario_data.get('shared_random_draws', None)
+        
         for sim_idx in range(num_simulations):
             # Simulate acceptance decisions exactly like Hikima
             accepted = np.zeros(len(acceptance_probs))
             for i in range(len(acceptance_probs)):
-                tmp = np.random.rand()
+                if shared_random_draws is not None and sim_idx < len(shared_random_draws):
+                    # Use pre-generated shared random number
+                    tmp = shared_random_draws[sim_idx, i]
+                else:
+                    # Fallback to generating new random number
+                    tmp = np.random.rand()
+                
                 if tmp < acceptance_probs[i]:
                     accepted[i] = 1
             
@@ -635,14 +672,16 @@ def _run_worker_simulations(task: Dict[str, Any]) -> Dict[str, List[float]]:
         worker_id = task['worker_id']
         num_sims = task['num_sims']
         seed_start = task['seed_start']
+        sim_offset = task['sim_offset']  # Starting simulation index for this worker
         prices = np.array(task['prices'])
         acceptance_probs = np.array(task['acceptance_probs'])
         edge_weights = np.array(task['edge_weights'])
         num_requesters = task['num_requesters']
         num_taxis = task['num_taxis']
         acceptance_function = task['acceptance_function']
+        shared_random_draws = np.array(task['shared_random_draws']) if task.get('shared_random_draws') is not None else None
         
-        # Initialize worker-specific random state
+        # Initialize worker-specific random state (fallback if no shared draws)
         np.random.seed(seed_start)
         
         # Storage for results
@@ -652,14 +691,23 @@ def _run_worker_simulations(task: Dict[str, Any]) -> Dict[str, List[float]]:
         
         # Run simulations for this worker
         for sim_idx in range(num_sims):
-            # Use different seed for each simulation to ensure variety
+            # Calculate global simulation index
+            global_sim_idx = sim_offset + sim_idx
+            
+            # Use different seed for each simulation to ensure variety (fallback if no shared draws)
             sim_seed = seed_start + sim_idx
             np.random.seed(sim_seed)
             
             # Simulate acceptance decisions exactly like Hikima
             accepted = np.zeros(len(acceptance_probs))
             for i in range(len(acceptance_probs)):
-                tmp = np.random.rand()
+                if shared_random_draws is not None and global_sim_idx < len(shared_random_draws):
+                    # Use pre-generated shared random number
+                    tmp = shared_random_draws[global_sim_idx, i]
+                else:
+                    # Fallback to generating new random number
+                    tmp = np.random.rand()
+                
                 if tmp < acceptance_probs[i]:
                     accepted[i] = 1
             
