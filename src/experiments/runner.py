@@ -346,10 +346,10 @@ class ExperimentRunner:
                             if method_data.empty:
                                 continue
                             
-                            total_rev = method_data['profit'].sum()
-                            total_val = method_data['total_value'].sum()
-                            accept_rate = method_data['sampled_decision'].mean()
-                            match_rate = method_data['was_matched'].mean()
+                            total_rev = method_data['expected_profit'].sum()
+                            total_val = method_data['expected_total_value'].sum()
+                            accept_rate = method_data['acceptance_prob_realized'].mean()
+                            match_rate = method_data['matching_prob'].mean()
                             
                             self.logger.info(f"  {method}_{acc_func}: Revenue=${total_rev:,.0f}, "
                                            f"TotalValue=${total_val:,.0f}, "
