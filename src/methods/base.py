@@ -127,7 +127,9 @@ class BasePricingMethod(ABC):
             # CRITICAL: Check if we have shared random draws (for fair comparison across methods)
             shared_random_draws = scenario_data.get('shared_random_draws', None)
             if shared_random_draws is not None:
-                self.logger.debug(f"{acceptance_function} using SHARED random draws (like reference code)")
+                self.logger.info(f"{acceptance_function} ✓ Using SHARED random draws {shared_random_draws.shape} (same for all methods)")
+            else:
+                self.logger.warning(f"{acceptance_function} ✗ No shared draws - using independent random numbers!")
             
             if num_simulations > 1:
                 # Determine if we should parallelize simulations
@@ -158,7 +160,7 @@ class BasePricingMethod(ABC):
                                 # Use pre-generated shared random number (same for ALL methods!)
                                 tmp = shared_random_draws[sim_idx, i]
                             else:
-                                # Fallback to generating new random number
+                                # Fallback to generating new random number (should not happen in production)
                                 tmp = np.random.rand()
                             
                             if tmp < acceptance_probs[i]:
@@ -193,7 +195,7 @@ class BasePricingMethod(ABC):
                         # Use pre-generated shared random number from last simulation
                         tmp = shared_random_draws[last_sim_idx, i]
                     else:
-                        # Fallback to generating new random number
+                        # Fallback to generating new random number (should not happen in production)
                         tmp = np.random.rand()
                     
                     if tmp < acceptance_probs[i]:
@@ -241,7 +243,7 @@ class BasePricingMethod(ABC):
                         # Use pre-generated shared random number
                         tmp = shared_random_draws[0, i]
                     else:
-                        # Fallback to generating new random number
+                        # Fallback to generating new random number (should not happen in production)
                         tmp = np.random.rand()
                     
                     if tmp < acceptance_probs[i]:
@@ -630,7 +632,7 @@ class BasePricingMethod(ABC):
                     # Use pre-generated shared random number
                     tmp = shared_random_draws[sim_idx, i]
                 else:
-                    # Fallback to generating new random number
+                    # Fallback to generating new random number (should not happen in production)
                     tmp = np.random.rand()
                 
                 if tmp < acceptance_probs[i]:
@@ -705,7 +707,7 @@ def _run_worker_simulations(task: Dict[str, Any]) -> Dict[str, List[float]]:
                     # Use pre-generated shared random number
                     tmp = shared_random_draws[global_sim_idx, i]
                 else:
-                    # Fallback to generating new random number
+                    # Fallback to generating new random number (should not happen in production)
                     tmp = np.random.rand()
                 
                 if tmp < acceptance_probs[i]:

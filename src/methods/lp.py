@@ -17,7 +17,7 @@ class LPMethod(BasePricingMethod):
     
     This method linearizes the Myerson revenue optimization problem by:
     1. Discretizing the price space into linearly-spaced levels (0 to 2×trip_amount)
-    2. Using probing variables y_c,π for each rider-price pair  
+    2. Using probing variables y_c,π for each rider-price pair
     3. Using allocation variables x_c,π and p_c,t for matching
     
     Price Grid Design:

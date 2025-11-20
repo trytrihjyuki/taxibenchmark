@@ -441,17 +441,18 @@ class ExperimentRunner:
                     total_requesters += result.get('num_requesters', 0)
                     total_taxis += result.get('num_taxis', 0)
                 
-                # Log cumulative statistics
-                self.logger.info(f"╔{'═' * 78}╗")
-                self.logger.info(f"║ CUMULATIVE STATS (through window {tw_idx+1:3d}/{len(time_windows)}){'': <42}║")
-                self.logger.info(f"╠{'═' * 78}╣")
-                self.logger.info(f"║ Total Scenarios: {len(all_results):5d}  |  Requesters: {total_requesters:6d}  |  Taxis: {total_taxis:6d}{'': <10}║")
-                self.logger.info(f"╠{'═' * 78}╣")
+                # Log cumulative statistics  
+                self.logger.info("")
+                self.logger.info("╔" + "═" * 78 + "╗")
+                self.logger.info(f"║ CUMULATIVE STATS (through window {tw_idx+1:3d}/{len(time_windows):3d})" + " " * 34 + "║")
+                self.logger.info("╠" + "═" * 78 + "╣")
+                self.logger.info(f"║ Scenarios: {len(all_results):4d}  |  Requesters: {total_requesters:5d}  |  Taxis: {total_taxis:5d}" + " " * 27 + "║")
+                self.logger.info("╠" + "═" * 78 + "╣")
                 
                 # Print per method per acceptance function
                 for acc_func in ['PL', 'Sigmoid']:
-                    self.logger.info(f"║ {acc_func + ' Acceptance':16}{'': <61}║")
-                    self.logger.info(f"║ {'-' * 76} ║")
+                    self.logger.info(f"║ {acc_func} Acceptance" + " " * (76 - len(acc_func) - 11) + "║")
+                    self.logger.info("║ " + "-" * 76 + " ║")
                     
                     for method_name in sorted(method_stats.keys()):
                         revenues = method_stats[method_name][acc_func]['revenues']
@@ -466,19 +467,20 @@ class ExperimentRunner:
                                 avg_opt = np.mean(opt_values)
                                 gap = avg_opt - avg_rev
                                 gap_pct = (gap / avg_opt * 100) if avg_opt > 0 else 0
-                                self.logger.info(
-                                    f"║   {method_name:12s}: ${avg_rev:8.2f} ± ${std_rev:6.2f}  "
-                                    f"(LP opt: ${avg_opt:8.2f}, gap: {gap_pct:5.1f}%){'': <3}║"
-                                )
+                                line = f"║   {method_name:14s}: ${avg_rev:7.2f} ± ${std_rev:6.2f}  (LP opt: ${avg_opt:7.2f}, gap: {gap_pct:5.1f}%)"
+                                # Pad to exact width
+                                line = line + " " * (79 - len(line)) + "║"
+                                self.logger.info(line)
                             else:
-                                self.logger.info(
-                                    f"║   {method_name:12s}: ${avg_rev:8.2f} ± ${std_rev:6.2f}{'': <33}║"
-                                )
+                                line = f"║   {method_name:14s}: ${avg_rev:7.2f} ± ${std_rev:6.2f}"
+                                # Pad to exact width
+                                line = line + " " * (79 - len(line)) + "║"
+                                self.logger.info(line)
                     
                     if acc_func == 'PL':  # Add separator between PL and Sigmoid
-                        self.logger.info(f"║ {' ' * 76} ║")
+                        self.logger.info("║" + " " * 78 + "║")
                 
-                self.logger.info(f"╠{'═' * 78}╣")
+                self.logger.info("╠" + "═" * 78 + "╣")
                 
                 # Timing statistics
                 if all_computation_times:
@@ -486,15 +488,19 @@ class ExperimentRunner:
                     cumulative_time = np.sum(all_computation_times)
                     avg_sim_time = cumulative_time / total_simulations_so_far if total_simulations_so_far > 0 else 0
                     
-                    self.logger.info(f"║ Simulations: {total_simulations_so_far:6d}  |  Cumulative Time: {cumulative_time:7.1f}s  |  Avg: {avg_sim_time*1000:6.2f}ms{'': <7}║")
+                    line = f"║ Simulations: {total_simulations_so_far:5d}  |  Cumulative: {cumulative_time:6.1f}s  |  Avg: {avg_sim_time*1000:6.2f}ms"
+                    line = line + " " * (79 - len(line)) + "║"
+                    self.logger.info(line)
                 
                 # Estimated time remaining
                 if tw_idx + 1 < len(time_windows) and tw_total_time > 0:
                     remaining_windows = len(time_windows) - (tw_idx + 1)
                     estimated_remaining = remaining_windows * tw_total_time
-                    self.logger.info(f"║ Estimated Remaining: {estimated_remaining:7.1f}s  ({estimated_remaining/60:5.1f} min){'': <31}║")
+                    line = f"║ Remaining: {estimated_remaining:7.1f}s ({estimated_remaining/60:5.1f} min) - {remaining_windows} windows left"
+                    line = line + " " * (79 - len(line)) + "║"
+                    self.logger.info(line)
                 
-                self.logger.info(f"╚{'═' * 78}╝")
+                self.logger.info("╚" + "═" * 78 + "╝")
                 self.logger.info("")
         
         # Create enhanced summary using new aggregator
