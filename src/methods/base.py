@@ -139,17 +139,9 @@ class BasePricingMethod(ABC):
                 if use_parallel:
                     self.logger.info(f"{acceptance_function} using PARALLEL simulations: {num_simulations} sims across {num_workers} workers")
                     (revenues, matching_rates, acceptance_rates,
-                     requester_match_counts, requester_total_values, requester_accepted_counts) = self._run_parallel_simulations(
+                     simulation_details) = self._run_parallel_simulations(
                         prices, acceptance_probs, scenario_data, num_simulations, num_workers, acceptance_function
                     )
-                    # Compute per-requester averages from parallel workers
-                    num_requesters = len(acceptance_probs)
-                    requester_matching_probs = requester_match_counts / num_simulations
-                    requester_acceptance_probs_realized = requester_accepted_counts / num_simulations
-                    requester_avg_values = np.zeros(num_requesters)
-                    for i in range(num_requesters):
-                        if requester_match_counts[i] > 0:
-                            requester_avg_values[i] = requester_total_values[i] / requester_match_counts[i]
                 else:
                     # Sequential simulations (original approach)
                     if num_workers > 1:
@@ -159,12 +151,9 @@ class BasePricingMethod(ABC):
                     revenues = []
                     matching_rates = []
                     acceptance_rates = []
+                    simulation_details = []  # NEW: Store per-simulation details
                     
-                    # NEW: Track per-requester statistics across all simulations
                     num_requesters = len(acceptance_probs)
-                    requester_match_counts = np.zeros(num_requesters)
-                    requester_total_values = np.zeros(num_requesters)
-                    requester_accepted_counts = np.zeros(num_requesters)
                     
                     for sim_idx in range(num_simulations):
                         # Simulate acceptance decisions exactly like Hikima (experiment_PL.py line 777)
@@ -180,29 +169,12 @@ class BasePricingMethod(ABC):
                             
                             if tmp < acceptance_probs[i]:
                                 accepted[i] = 1
-                                requester_accepted_counts[i] += 1
                         
                         # Calculate objective value using Hikima's value_eval function
                         opt_value, matched_edges, rewards = self._compute_objective_value_hikima(
                             prices, accepted, scenario_data['edge_weights'],
                             scenario_data['num_requesters'], scenario_data['num_taxis']
                         )
-                        
-                        # NEW: Track per-requester matching and values
-                        edge_weights = scenario_data['edge_weights']
-                        for (i, j) in matched_edges:
-                            # Determine requester index
-                            if i < scenario_data['num_requesters']:
-                                req_idx = i
-                                taxi_idx = j - scenario_data['num_requesters']
-                            else:
-                                req_idx = j
-                                taxi_idx = i - scenario_data['num_requesters']
-                            
-                            if req_idx < num_requesters:
-                                requester_match_counts[req_idx] += 1
-                                # Total value = price + edge_weight
-                                requester_total_values[req_idx] += prices[req_idx] + edge_weights[req_idx, taxi_idx]
                         
                         # Calculate metrics like Hikima
                         revenue = opt_value  # This is the total objective value
@@ -213,22 +185,24 @@ class BasePricingMethod(ABC):
                         matching_rates.append(matching_rate)
                         acceptance_rates.append(acceptance_rate)
                         
+                        # NEW: Store detailed per-simulation info
+                        simulation_details.append({
+                            'sim_idx': sim_idx,
+                            'total_value': revenue,
+                            'matching_ratio': matching_rate,
+                            'acceptance_ratio': acceptance_rate,
+                            'avg_price_proposed': float(np.mean(prices)) if len(prices) > 0 else 0.0,
+                            'num_matched': len(matched_edges),
+                            'num_accepted': int(np.sum(accepted)),
+                            'num_requesters': num_requesters
+                        })
+                        
                         # Log progress for long simulations
                         if sim_idx > 0 and (sim_idx + 1) % 10 == 0:
                             elapsed = time() - sim_start
                             self.logger.debug(f"{acceptance_function} simulation {sim_idx+1}/{num_simulations} ({elapsed:.1f}s)")
-                    
-                    # NEW: Compute per-requester averaged statistics across all simulations
-                    requester_matching_probs = requester_match_counts / num_simulations
-                    requester_acceptance_probs_realized = requester_accepted_counts / num_simulations
-                    
-                    # Average total value when matched (avoid division by zero)
-                    requester_avg_values = np.zeros(num_requesters)
-                    for i in range(num_requesters):
-                        if requester_match_counts[i] > 0:
-                            requester_avg_values[i] = requester_total_values[i] / requester_match_counts[i]
                 
-                # Store per-requester statistics for decision tracking (common for both parallel and sequential)
+                # Store results including per-simulation details
                 func_results = {
                     'prices': prices.tolist() if len(prices) > 0 else [],
                     'acceptance_probs': acceptance_probs.tolist() if len(acceptance_probs) > 0 else [],
@@ -239,10 +213,8 @@ class BasePricingMethod(ABC):
                     'avg_acceptance_rate': float(np.mean(acceptance_rates)),
                     'computation_time': computation_time,
                     'num_simulations': num_simulations,
-                    # NEW: Per-requester averaged statistics across simulations
-                    'requester_matching_probs': requester_matching_probs.tolist(),
-                    'requester_avg_values': requester_avg_values.tolist(),
-                    'requester_acceptance_probs_realized': requester_acceptance_probs_realized.tolist(),
+                    # NEW: Per-simulation details for saving to parquet
+                    'simulation_details': simulation_details,
                 }
                 
                 # NEW: Store LP solver's optimal value (not simulation result!)
@@ -270,28 +242,35 @@ class BasePricingMethod(ABC):
                     scenario_data['num_requesters'], scenario_data['num_taxis']
                 )
                 
-                # Create matching results array for decision tracking
-                matching_results = np.full(len(prices), -1, dtype=int)  # -1 means not matched
-                for (i, j) in matched_edges:
-                    # Handle edge order like Hikima
-                    if i > j:
-                        requester_idx = j
-                    else:
-                        requester_idx = i
-                    if requester_idx < len(matching_results):
-                        matching_results[requester_idx] = j if i <= j else (i - scenario_data['num_requesters'])
+                # Calculate metrics
+                matching_rate = len(matched_edges) / len(accepted) if len(accepted) > 0 else 0
+                acceptance_rate = np.mean(accepted)
+                num_requesters = len(accepted)
+                
+                # Create single simulation detail
+                simulation_details = [{
+                    'sim_idx': 0,
+                    'total_value': realized_value,
+                    'matching_ratio': matching_rate,
+                    'acceptance_ratio': acceptance_rate,
+                    'avg_price_proposed': float(np.mean(prices)) if len(prices) > 0 else 0.0,
+                    'num_matched': len(matched_edges),
+                    'num_accepted': int(np.sum(accepted)),
+                    'num_requesters': num_requesters
+                }]
                 
                 func_results = {
                     'prices': prices.tolist() if len(prices) > 0 else [],
                     'acceptance_probs': acceptance_probs.tolist() if len(acceptance_probs) > 0 else [],
-                    'matching_results': matching_results.tolist(),  # Add matching results for decision tracking
                     'avg_revenue': float(realized_value),
                     'std_revenue': 0.0,
-                    'avg_matching_rate': float(len(matched_edges) / len(accepted)) if len(accepted) > 0 else 0,
+                    'avg_matching_rate': float(matching_rate),
                     'std_matching_rate': 0.0,
-                    'avg_acceptance_rate': float(np.mean(accepted)) if len(accepted) > 0 else 0,
+                    'avg_acceptance_rate': float(acceptance_rate),
                     'computation_time': computation_time,
-                    'num_simulations': 1
+                    'num_simulations': 1,
+                    # NEW: Per-simulation details
+                    'simulation_details': simulation_details,
                 }
                 
                 # NEW: Store LP solver's optimal value (for aggregation later)
@@ -507,7 +486,7 @@ class BasePricingMethod(ABC):
         num_simulations: int,
         num_workers: int,
         acceptance_function: str
-    ) -> Tuple[List[float], List[float], List[float]]:
+    ) -> Tuple[List[float], List[float], List[float], List[Dict]]:
         """
         Run Monte Carlo simulations in parallel across workers.
         
@@ -520,7 +499,7 @@ class BasePricingMethod(ABC):
             acceptance_function: 'PL' or 'Sigmoid'
             
         Returns:
-            Tuple of (revenues, matching_rates, acceptance_rates) lists
+            Tuple of (revenues, matching_rates, acceptance_rates, simulation_details) lists
         """
         
         # Distribute simulations across workers
@@ -564,12 +543,7 @@ class BasePricingMethod(ABC):
         all_revenues = []
         all_matching_rates = []
         all_acceptance_rates = []
-        
-        # NEW: Aggregate per-requester statistics across workers
-        num_requesters = len(acceptance_probs)
-        total_requester_match_counts = np.zeros(num_requesters)
-        total_requester_total_values = np.zeros(num_requesters)
-        total_requester_accepted_counts = np.zeros(num_requesters)
+        all_simulation_details = []  # NEW: Collect all simulation details
         
         try:
             with ProcessPoolExecutor(max_workers=num_workers) as executor:
@@ -599,11 +573,9 @@ class BasePricingMethod(ABC):
                         all_matching_rates.extend(worker_results['matching_rates'])
                         all_acceptance_rates.extend(worker_results['acceptance_rates'])
                         
-                        # NEW: Aggregate per-requester statistics
-                        if 'requester_match_counts' in worker_results:
-                            total_requester_match_counts += np.array(worker_results['requester_match_counts'])
-                            total_requester_total_values += np.array(worker_results['requester_total_values'])
-                            total_requester_accepted_counts += np.array(worker_results['requester_accepted_counts'])
+                        # NEW: Collect per-simulation details
+                        if 'simulation_details' in worker_results:
+                            all_simulation_details.extend(worker_results['simulation_details'])
                         
                         self.logger.debug(f"{acceptance_function} worker {worker_id} completed {len(worker_results['revenues'])} simulations")
                         
@@ -628,9 +600,8 @@ class BasePricingMethod(ABC):
             self.logger.error(f"Expected {num_simulations} results, got {len(all_revenues)}")
             raise ValueError(f"Parallel simulation incomplete: expected {num_simulations}, got {len(all_revenues)}")
         
-        # NEW: Return both aggregate and per-requester statistics
-        return (all_revenues, all_matching_rates, all_acceptance_rates,
-                total_requester_match_counts, total_requester_total_values, total_requester_accepted_counts)
+        # Return aggregate and per-simulation statistics
+        return (all_revenues, all_matching_rates, all_acceptance_rates, all_simulation_details)
     
     def _run_sequential_simulations(
         self,
@@ -639,19 +610,21 @@ class BasePricingMethod(ABC):
         scenario_data: Dict[str, Any],
         num_simulations: int,
         acceptance_function: str
-    ) -> Tuple[List[float], List[float], List[float]]:
+    ) -> Tuple[List[float], List[float], List[float], List[Dict]]:
         """
         Run simulations sequentially (fallback method).
         
         Returns:
-            Tuple of (revenues, matching_rates, acceptance_rates) lists
+            Tuple of (revenues, matching_rates, acceptance_rates, simulation_details) lists
         """
         revenues = []
         matching_rates = []
         acceptance_rates = []
+        simulation_details = []  # NEW: Store per-simulation details
         
         # Check for shared random draws
         shared_random_draws = scenario_data.get('shared_random_draws', None)
+        num_requesters = len(acceptance_probs)
         
         for sim_idx in range(num_simulations):
             # Simulate acceptance decisions exactly like Hikima
@@ -681,8 +654,20 @@ class BasePricingMethod(ABC):
             revenues.append(revenue)
             matching_rates.append(matching_rate)
             acceptance_rates.append(acceptance_rate)
+            
+            # NEW: Store detailed per-simulation info
+            simulation_details.append({
+                'sim_idx': sim_idx,
+                'total_value': revenue,
+                'matching_ratio': matching_rate,
+                'acceptance_ratio': acceptance_rate,
+                'avg_price_proposed': float(np.mean(prices)) if len(prices) > 0 else 0.0,
+                'num_matched': len(matched_edges),
+                'num_accepted': int(np.sum(accepted)),
+                'num_requesters': num_requesters
+            })
         
-        return revenues, matching_rates, acceptance_rates
+        return revenues, matching_rates, acceptance_rates, simulation_details
 
 
 def _run_worker_simulations(task: Dict[str, Any]) -> Dict[str, List[float]]:
@@ -719,11 +704,7 @@ def _run_worker_simulations(task: Dict[str, Any]) -> Dict[str, List[float]]:
         revenues = []
         matching_rates = []
         acceptance_rates = []
-        
-        # NEW: Track per-requester statistics
-        requester_match_counts = np.zeros(num_requesters)
-        requester_total_values = np.zeros(num_requesters)
-        requester_accepted_counts = np.zeros(num_requesters)
+        simulation_details = []  # NEW: Store per-simulation details
         
         # Run simulations for this worker
         for sim_idx in range(num_sims):
@@ -746,27 +727,11 @@ def _run_worker_simulations(task: Dict[str, Any]) -> Dict[str, List[float]]:
                 
                 if tmp < acceptance_probs[i]:
                     accepted[i] = 1
-                    requester_accepted_counts[i] += 1
             
             # Calculate objective value using Hikima's value_eval function (replicated here)
             opt_value, matched_edges = _compute_objective_value_worker(
                 prices, accepted, edge_weights, num_requesters, num_taxis
             )
-            
-            # NEW: Track per-requester matching and values
-            for (i, j) in matched_edges:
-                # Determine requester index
-                if i < num_requesters:
-                    req_idx = i
-                    taxi_idx = j - num_requesters
-                else:
-                    req_idx = j
-                    taxi_idx = i - num_requesters
-                
-                if req_idx < num_requesters:
-                    requester_match_counts[req_idx] += 1
-                    # Total value = price + edge_weight
-                    requester_total_values[req_idx] += prices[req_idx] + edge_weights[req_idx, taxi_idx]
             
             # Calculate metrics like Hikima
             revenue = opt_value
@@ -776,6 +741,18 @@ def _run_worker_simulations(task: Dict[str, Any]) -> Dict[str, List[float]]:
             revenues.append(revenue)
             matching_rates.append(matching_rate)
             acceptance_rates.append(acceptance_rate)
+            
+            # NEW: Store detailed per-simulation info
+            simulation_details.append({
+                'sim_idx': global_sim_idx,  # Use global index for consistency
+                'total_value': revenue,
+                'matching_ratio': matching_rate,
+                'acceptance_ratio': acceptance_rate,
+                'avg_price_proposed': float(np.mean(prices)) if len(prices) > 0 else 0.0,
+                'num_matched': len(matched_edges),
+                'num_accepted': int(np.sum(accepted)),
+                'num_requesters': num_requesters
+            })
         
         return {
             'revenues': revenues,
@@ -783,10 +760,8 @@ def _run_worker_simulations(task: Dict[str, Any]) -> Dict[str, List[float]]:
             'acceptance_rates': acceptance_rates,
             'worker_id': worker_id,
             'num_sims_completed': len(revenues),
-            # NEW: Per-requester statistics from this worker
-            'requester_match_counts': requester_match_counts.tolist(),
-            'requester_total_values': requester_total_values.tolist(),
-            'requester_accepted_counts': requester_accepted_counts.tolist(),
+            # NEW: Per-simulation details
+            'simulation_details': simulation_details,
         }
         
     except Exception as e:

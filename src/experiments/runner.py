@@ -346,21 +346,28 @@ class ExperimentRunner:
                             if method_data.empty:
                                 continue
                             
-                            total_rev = method_data['expected_profit'].sum()
-                            total_val = method_data['expected_total_value'].sum()
-                            accept_rate = method_data['acceptance_prob_realized'].mean()
-                            match_rate = method_data['matching_prob'].mean()
+                            # NEW: Use per-simulation aggregates instead of per-requester
+                            # total_value is already summed per simulation, so mean gives avg per simulation
+                            avg_total_val = method_data['total_value'].mean()
+                            total_total_val = method_data['total_value'].sum()  # Sum across all simulations
+                            avg_accept_rate = method_data['acceptance_ratio'].mean()
+                            avg_match_rate = method_data['matching_ratio'].mean()
                             
-                            self.logger.info(f"  {method}_{acc_func}: Revenue=${total_rev:,.0f}, "
-                                           f"TotalValue=${total_val:,.0f}, "
-                                           f"Accept={accept_rate:.1%}, Match={match_rate:.1%}")
+                            self.logger.info(f"  {method}_{acc_func}: AvgValue=${avg_total_val:,.2f}, "
+                                           f"TotalValue=${total_total_val:,.0f}, "
+                                           f"Accept={avg_accept_rate:.1%}, Match={avg_match_rate:.1%}")
                             
                             # Show LP optimality if available
                             if method == 'LP' and 'opt_value' in method_data.columns:
-                                opt_total = method_data.groupby('time_window_idx')['opt_value'].first().sum()
+                                # opt_value is the same for all simulations in a time window
+                                # Group by time window to get unique opt_value per window
+                                opt_by_tw = method_data.groupby('time_window_idx')['opt_value'].first()
+                                opt_total = opt_by_tw.sum()
                                 if opt_total > 0:
-                                    ratio = total_val / opt_total
-                                    self.logger.info(f"       → LP Optimal=${opt_total:,.0f}, "
+                                    # Compare average simulation value to average optimal value
+                                    avg_opt = opt_by_tw.mean()
+                                    ratio = avg_total_val / avg_opt if avg_opt > 0 else 0
+                                    self.logger.info(f"       → LP Optimal=${avg_opt:,.2f}/sim (total=${opt_total:,.0f}), "
                                                    f"Optimality={ratio:.1%}")
                 self.logger.info("")
             
@@ -987,19 +994,14 @@ class ExperimentRunner:
         }
     
     def _create_enhanced_decisions_dataframe(self, results: List[Dict], tw_idx: int) -> pd.DataFrame:
-        """Create enhanced decisions DataFrame with sampled decisions, profit, and compute_time."""
+        """Create decisions DataFrame with per-simulation statistics (one row per simulation)."""
         if not results:
             return pd.DataFrame()
         
-        # Collect all decisions with enhanced information
+        # Collect all simulation decisions
         decisions = []
         
         for result in results:
-            if 'prices' not in result:
-                continue
-                
-            prices = result['prices']
-            n_requesters = len(prices)
             method = result.get('method', '')
             borough = result.get('borough', '')
             computation_time = result.get('computation_time', 0)
@@ -1010,29 +1012,46 @@ class ExperimentRunner:
                     continue
                 
                 func_results = result[accept_func]
-                acceptance_probs = func_results.get('acceptance_probs', [])
                 
-                # NEW: Use averaged statistics across all simulations (not just 99th)
-                requester_matching_probs = func_results.get('requester_matching_probs', [])
-                requester_avg_values = func_results.get('requester_avg_values', [])
-                requester_acceptance_probs_realized = func_results.get('requester_acceptance_probs_realized', [])
-                
-                # Store optimal value for LP method only
+                # Get LP optimal value if available (same for all simulations)
                 opt_value = func_results.get('opt_value', None)
                 
-                for i in range(n_requesters):
-                    price = prices[i] if i < len(prices) else 0
-                    accept_prob = acceptance_probs[i] if i < len(acceptance_probs) else 0
+                # Get per-simulation details
+                simulation_details = func_results.get('simulation_details', [])
+                
+                if simulation_details:
+                    # NEW STRUCTURE: One row per simulation
+                    for sim_detail in simulation_details:
+                        decision = {
+                            'time_window_idx': tw_idx,
+                            'time_window': result.get('time_window', ''),
+                            'borough': borough,
+                            'method': method,
+                            'acceptance_function': accept_func,
+                            'simulation_idx': sim_detail['sim_idx'],
+                            'total_value': sim_detail['total_value'],
+                            'matching_ratio': sim_detail['matching_ratio'],
+                            'acceptance_ratio': sim_detail['acceptance_ratio'],
+                            'avg_price_proposed': sim_detail['avg_price_proposed'],
+                            'num_matched': sim_detail['num_matched'],
+                            'num_accepted': sim_detail['num_accepted'],
+                            'num_requesters': sim_detail['num_requesters'],
+                            'compute_time': computation_time,
+                            'opt_value': opt_value,  # LP optimal value (same for all sims)
+                        }
+                        decisions.append(decision)
+                else:
+                    # Fallback for single simulation or old format
+                    avg_revenue = func_results.get('avg_revenue', 0)
+                    avg_matching_rate = func_results.get('avg_matching_rate', 0)
+                    avg_acceptance_rate = func_results.get('avg_acceptance_rate', 0)
                     
-                    # NEW: Use averaged statistics from simulations
-                    matching_prob = requester_matching_probs[i] if i < len(requester_matching_probs) else 0.0
-                    avg_value = requester_avg_values[i] if i < len(requester_avg_values) else 0.0
-                    acceptance_prob_realized = requester_acceptance_probs_realized[i] if i < len(requester_acceptance_probs_realized) else 0.0
+                    # Get prices for avg calculation
+                    prices = func_results.get('prices', [])
+                    avg_price = float(np.mean(prices)) if prices else 0.0
                     
-                    # Expected profit and total value (probability-weighted averages)
-                    # This is what we expect on average across all simulations
-                    expected_profit = price * acceptance_prob_realized
-                    expected_total_value = avg_value * matching_prob
+                    # Get number of requesters from result
+                    num_requesters = result.get('num_requesters', 0)
                     
                     decision = {
                         'time_window_idx': tw_idx,
@@ -1040,20 +1059,16 @@ class ExperimentRunner:
                         'borough': borough,
                         'method': method,
                         'acceptance_function': accept_func,
-                        'requester_id': i,
-                        'price': price,
-                        'acceptance_prob': accept_prob,  # Theoretical acceptance probability
-                        'acceptance_prob_realized': acceptance_prob_realized,  # Actual avg acceptance rate from sims
-                        'matching_prob': matching_prob,  # Probability of being matched (0 to 1)
-                        'avg_value_when_matched': avg_value,  # Average (price + edge_weight) when matched
-                        'expected_profit': expected_profit,  # Expected revenue (price * acceptance_prob)
-                        'expected_total_value': expected_total_value,  # Expected total value (avg_value * matching_prob)
-                        'compute_time': computation_time,  # Computation time for this method
-                        'opt_value': opt_value,  # LP optimal value (None for other methods)
-                        # Note: For apple-to-apple comparison:
-                        # - Sum 'expected_profit' across requesters = expected revenue
-                        # - Sum 'expected_total_value' across requesters = expected total value
-                        # - Compare 'expected_total_value' sum to 'opt_value' for LP optimality analysis
+                        'simulation_idx': 0,  # Single simulation
+                        'total_value': avg_revenue,
+                        'matching_ratio': avg_matching_rate,
+                        'acceptance_ratio': avg_acceptance_rate,
+                        'avg_price_proposed': avg_price,
+                        'num_matched': int(avg_matching_rate * num_requesters),
+                        'num_accepted': int(avg_acceptance_rate * num_requesters),
+                        'num_requesters': num_requesters,
+                        'compute_time': computation_time,
+                        'opt_value': opt_value,
                     }
                     decisions.append(decision)
         
